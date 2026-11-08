@@ -1,0 +1,21 @@
+[project]
+name = "tutor-agent"
+version = "0.1.0"
+description = "Spanish voice tutor agent (LiveKit Agents)"
+requires-python = ">=3.12"
+dependencies = [
+    "livekit-agents[anthropic,cartesia,deepgram,silero,turn-detector]>=1.8.11",
+    "python-dotenv>=1.2.4",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.4",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
