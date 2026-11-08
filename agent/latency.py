@@ -60,6 +60,10 @@ class LatencyLogger:
         if turn.complete():
             turn.logged = True  # kept so later per-sentence TTS metrics are ignored
             self._log(speech_id, turn)
+        elif turn.eou is None and turn.llm is not None and turn.tts is not None:
+            # Typed turn or greeting: no speech, so no EOU metric ever arrives.
+            turn.logged = True
+            self._log_text_turn(speech_id, turn)
 
         while len(self._turns) > MAX_TRACKED_TURNS:
             self._turns.pop(next(iter(self._turns)))
@@ -83,4 +87,15 @@ class LatencyLogger:
             total_ms,
             verdict,
             TARGET_MS,
+        )
+
+    def _log_text_turn(self, speech_id: str, turn: _Turn) -> None:
+        llm_ms = turn.llm.ttft * 1000
+        tts_ms = turn.tts.ttfb * 1000
+        log.info(
+            "text turn %s | llm_ttft %4.0f | tts_ttfb %4.0f | total %4.0f ms",
+            speech_id,
+            llm_ms,
+            tts_ms,
+            llm_ms + tts_ms,
         )

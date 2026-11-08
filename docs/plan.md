@@ -160,6 +160,15 @@ Each phase ends with something you can use, so you can stop after any of them. F
 - [x] Use LiveKit's React starter as the web client
 - [x] Log time from end of your speech to first tutor audio, per stage
 
+**Phase 1 status (done, 2026-11-08):**
+
+- [x] CEFR level picker (A1–C1) drives prompt and TTS speed; sent as agent dispatch metadata
+- [x] Language policy: recast English, fill gaps in mixed turns, stay in Spanish; `agent/evals/recast.py` passes 97% over 3 runs
+- [x] Open mic + push-to-talk (button or space bar), switchable mid-call
+- [x] Live transcript and typed input (from the LiveKit starter)
+- [x] 30-turn typed chat (`agent/evals/long_chat.py`): stable, recasts correct, reply time flat
+- Latency: Sonnet 5.5 runs with thinking off at low effort (default high effort cost ~2.4 s to first token). Typed reply ~1.8 s as seen by the client, ~0.85 s agent-side; accepted for now. Revisit in Phase 5.
+
 ## Costs, risks and open questions
 
 Running costs are dominated by the models, not the framework; expect cents per minute of conversation.
