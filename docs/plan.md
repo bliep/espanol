@@ -154,10 +154,11 @@ The same roadmap as a table (kept for Markdown export):
 
 Each phase ends with something you can use, so you can stop after any of them. First steps for the spike:
 
-- [x] Create LiveKit Cloud, Deepgram, Anthropic and Cartesia accounts; put the keys in `.env`- [x] Start from LiveKit's Python voice-agent starter and swap in the Deepgram (`nova-3`, `language=multi`), Anthropic and Cartesia plugins
+- [x] Create LiveKit Cloud, Deepgram, Anthropic and Cartesia accounts; put the keys in `.env`
+- [x] Start from LiveKit's Python voice-agent starter and swap in the Deepgram (`nova-3`, `language=multi`), Anthropic and Cartesia plugins
 - [x] Write a first tutor prompt: A2 level, Spanish-first, recast English replies, max 2 sentences per turn
-- [ ] Use LiveKit's React starter as the web client
-- [ ] Log time from end of your speech to first tutor audio, per stage
+- [x] Use LiveKit's React starter as the web client
+- [x] Log time from end of your speech to first tutor audio, per stage
 
 ## Costs, risks and open questions
 

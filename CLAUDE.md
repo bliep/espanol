@@ -4,7 +4,7 @@ A voice-first Spanish tutor for English speakers. The tutor speaks Spanish; the 
 
 ## Current status
 
-- Current phase: **Phase 0 – Spike** (in progress: agent pipeline done; web client and latency logging pending)
+- Current phase: **Phase 1 – Conversation MVP** (Phase 0 done)
 - Update this line whenever a phase is finished.
 
 ## Architecture (cascaded voice pipeline)
@@ -63,9 +63,10 @@ docs/         notes and plan.md
 
 - Agent console (terminal mic, no web): `cd agent && uv run python main.py console`
 - Agent dev: `cd agent && uv run python main.py dev`
+- Agent eval (language policy, ~$0.02/run): `cd agent && uv run python evals/recast.py --runs 3`. Run after any prompt or LLM change.
 - Agent lint: `cd agent && uv run ruff check . && uv run ruff format .`
-- `web/` is a git submodule of `livekit-examples/agent-starter-react`; keep it unmodified. Use pnpm with its lockfile (npm resolves newer deps that break the build).
+- `web/` is a git submodule: fork `bliep/agent-starter-react`, branch `tutor` (our changes); remote `upstream` = `livekit-examples/agent-starter-react`. Use pnpm with its lockfile (npm resolves newer deps that break the build). GitHub account: `bliep`.
 - Web setup: `git submodule update --init && ln -sf ../.env web/.env.local && cd web && npx pnpm@9.15.9 install --frozen-lockfile`
 - Web dev: `cd web && npx pnpm@9.15.9 dev` (http://localhost:3000)
 - Web check: `cd web && npx pnpm@9.15.9 exec tsc --noEmit && npx pnpm@9.15.9 build`
-- Bump upstream: `git submodule update --remote web`
+- Bump upstream: `cd web && git fetch upstream && git merge upstream/main` (on `tutor`)

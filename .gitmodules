@@ -1,3 +1,4 @@
 [submodule "web"]
 	path = web
-	url = https://github.com/livekit-examples/agent-starter-react
+	url = git@github.com:bliep/agent-starter-react.git
+	branch = tutor
