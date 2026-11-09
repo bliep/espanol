@@ -6,3 +6,6 @@ __pycache__/
 node_modules/
 .next/
 .DS_Store
+
+# Learner voice recordings for the eval set (personal data, local only)
+agent/evals/recordings/

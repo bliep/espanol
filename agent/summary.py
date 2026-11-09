@@ -8,6 +8,7 @@ on the voice path.
 import anthropic
 from pydantic import BaseModel, Field
 
+from costs import CostMeter
 from feedback import VocabItem
 from feedback_channel import FeedbackMessage
 from prompts import Level
@@ -52,8 +53,11 @@ Transcript = list[tuple[str, str]]  # (role, text)
 
 
 class SessionSummarizer:
-    def __init__(self, client: anthropic.AsyncAnthropic | None = None) -> None:
+    def __init__(
+        self, client: anthropic.AsyncAnthropic | None = None, meter: CostMeter | None = None
+    ) -> None:
         self._client = client or anthropic.AsyncAnthropic()
+        self._meter = meter
 
     async def summarize(
         self, feedback: list[FeedbackMessage], transcript: Transcript, level: Level
@@ -76,6 +80,8 @@ class SessionSummarizer:
             output_format=_ModelSummary,
             output_config={"effort": SUMMARY_EFFORT},
         )
+        if self._meter:
+            self._meter.add_claude(SUMMARY_MODEL, response.usage)
         return SessionSummary(**response.parsed_output.model_dump(), new_words=_gaps(feedback))
 
 

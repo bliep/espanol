@@ -7,15 +7,17 @@ Run: uv run python main.py console   (terminal mic/speaker, no web client)
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from uuid import UUID
 
 from dotenv import load_dotenv
 from livekit import agents, rtc
-from livekit.agents import AgentServer, JobContext, JobProcess, room_io
+from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, room_io
 
 import pipeline
+from costs import CostMeter
+from drill_content import DrillItemGenerator, TranslationJudge
 from drills import DrillDeps
 from feedback import FeedbackExtractor
 from feedback_channel import FeedbackChannel, FeedbackMessage
@@ -26,7 +28,10 @@ from learner_store import LearnerStore
 from mode_controller import ModeController
 from modes import ModeRequest
 from prompts import DEFAULT_LEVEL, Level, build_greeting
+from pronunciation import PronunciationAssessor
+from sentence_translator import SentenceTranslator
 from session_recap import SessionRecap
+from turn_recorder import TurnRecorder, recording_enabled
 from tutor_agents import Tutor
 
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -43,9 +48,13 @@ RPC_SESSION_SUMMARY = "session_summary"  # returns SessionSummary JSON
 RPC_LESSON_CONTEXT = "lesson_context"  # returns LessonContext JSON
 RPC_SET_LESSON_MODE = "set_lesson_mode"  # payload: ModeRequest JSON
 RPC_WORD_SCORES = "word_scores"  # returns WeakWord JSON list
+RPC_SESSION_COST = "session_cost"  # returns CostBreakdown JSON
+RPC_REPLAY_SLOW = "replay_slow"  # payload: tutor line to re-speak slowly
+RPC_TRANSLATE = "translate_line"  # payload: tutor line; returns English
 RPC_OK = "ok"
 
 DB_URL_KEY = "SUPABASE_DB_URL"
+AZURE_KEY_ENV = "AZURE_SPEECH_KEY"  # repeat-after-me only; sessions run without it
 
 # Text stream topics (web/lib/tutor-feedback.ts, web/lib/tutor-drill.ts).
 FEEDBACK_TOPIC = "tutor.feedback"
@@ -126,6 +135,42 @@ def register_mode_rpcs(
     participant.register_rpc_method(RPC_WORD_SCORES, word_scores)
 
 
+def register_support_rpcs(
+    participant: rtc.LocalParticipant, session: AgentSession, meter: CostMeter
+) -> None:
+    """Listening support (slow replay, translation) and the running session cost."""
+    slow_tts = pipeline.build_slow_tts()
+    translator = SentenceTranslator(meter=meter)
+
+    def line_of(data: rtc.RpcInvocationData) -> str:
+        if not data.payload.strip():
+            raise rtc.RpcError(rtc.RpcError.ErrorCode.APPLICATION_ERROR, "empty line")
+        return data.payload.strip()
+
+    async def replay(data: rtc.RpcInvocationData) -> str:
+        line = line_of(data)
+        meter.add_tts(len(line))
+
+        async def frames() -> AsyncIterator[rtc.AudioFrame]:
+            async with slow_tts.synthesize(line) as stream:
+                async for chunk in stream:
+                    yield chunk.frame
+
+        # No text: the transcript and chat history keep the original line only.
+        session.say("", audio=frames(), add_to_chat_ctx=False)
+        return RPC_OK
+
+    async def translate(data: rtc.RpcInvocationData) -> str:
+        return await translator.translate(line_of(data))
+
+    async def cost(_: rtc.RpcInvocationData) -> str:
+        return meter.breakdown().model_dump_json()
+
+    participant.register_rpc_method(RPC_REPLAY_SLOW, replay)
+    participant.register_rpc_method(RPC_TRANSLATE, translate)
+    participant.register_rpc_method(RPC_SESSION_COST, cost)
+
+
 async def open_learner(ctx: JobContext, level: Level) -> tuple[LearnerModel, LearnerStore] | None:
     """Learner model when the participant is logged in (identity = Supabase user id).
 
@@ -178,6 +223,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session = pipeline.build_session(ctx.proc.userdata[VAD_KEY], level, lesson.keyterms())
     LatencyLogger().attach(session)
+    meter = CostMeter()
+    meter.attach(session)
 
     async def publish_feedback(payload: str) -> None:
         await ctx.room.local_participant.send_text(payload, topic=FEEDBACK_TOPIC)
@@ -186,11 +233,14 @@ async def entrypoint(ctx: JobContext) -> None:
         await learner.record_turn(message.learner, message.feedback)
 
     feedback = FeedbackChannel(
-        FeedbackExtractor(), level, publish_feedback, record_feedback if learner else None
+        FeedbackExtractor(meter=meter),
+        level,
+        publish_feedback,
+        record_feedback if learner else None,
     )
     feedback.attach(session)
 
-    recap = SessionRecap(session, feedback, level, learner)
+    recap = SessionRecap(session, feedback, level, learner, meter)
 
     # One callback: LiveKit runs shutdown callbacks concurrently; the store must outlive recap.
     async def shutdown() -> None:
@@ -203,19 +253,32 @@ async def entrypoint(ctx: JobContext) -> None:
     async def publish_drill(payload: str) -> None:
         await ctx.room.local_participant.send_text(payload, topic=DRILL_TOPIC)
 
-    modes = ModeController(session, feedback, DrillDeps(level, lesson, learner, publish_drill))
+    deps = DrillDeps(
+        level,
+        lesson,
+        learner,
+        publish_drill,
+        generator=DrillItemGenerator(meter=meter),
+        judge=TranslationJudge(meter=meter),
+        assessor=PronunciationAssessor(meter=meter) if os.environ.get(AZURE_KEY_ENV) else None,
+    )
+    recorder = TurnRecorder(level) if recording_enabled() else None
+    if recorder:
+        recorder.attach(session)
+    modes = ModeController(session, feedback, deps, recorder)
 
     # RPCs before start: the greeting tells clients the agent is ready for them.
     participant = ctx.room.local_participant
     register_input_rpcs(participant, InputController(session))
     register_lesson_rpcs(participant, recap, lesson)
     register_mode_rpcs(participant, modes, learner)
+    register_support_rpcs(participant, session, meter)
 
     greeting = build_greeting([w.spanish for w in lesson.due_words])
     text_input = room_io.TextInputOptions(text_input_cb=modes.on_text_input)
     await session.start(
         room=ctx.room,
-        agent=Tutor(level, lesson, greeting),
+        agent=Tutor(level, lesson, greeting, recorder),
         room_options=room_io.RoomOptions(text_input=text_input),
     )
 

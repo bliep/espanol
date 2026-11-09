@@ -26,10 +26,13 @@ from enum import StrEnum
 import azure.cognitiveservices.speech as speechsdk
 from pydantic import BaseModel
 
+from costs import CostMeter
+
 log = logging.getLogger("tutor.pronunciation")
 
 LOCALE = "es-ES"  # target variety (CLAUDE.md)
 SAMPLE_RATE = 16_000  # what we push; callers resample to this
+BYTES_PER_SECOND = SAMPLE_RATE * 2  # 16-bit mono
 RECOGNITION_TIMEOUT_S = 30.0
 KEY_ENV = "AZURE_SPEECH_KEY"
 REGION_ENV = "AZURE_SPEECH_REGION"
@@ -59,13 +62,18 @@ MISPRONOUNCED_BELOW = 60  # word accuracy under this is shown as an error
 
 
 class PronunciationAssessor:
-    def __init__(self, key: str | None = None, region: str | None = None) -> None:
+    def __init__(
+        self, key: str | None = None, region: str | None = None, meter: CostMeter | None = None
+    ) -> None:
         self._config = speechsdk.SpeechConfig(
             subscription=key or os.environ[KEY_ENV], region=region or os.environ[REGION_ENV]
         )
+        self._meter = meter
 
     async def assess(self, pcm: bytes, reference: str) -> PronunciationScore:
         """pcm: 16 kHz, 16-bit, mono. Runs the blocking SDK call in a worker thread."""
+        if self._meter:
+            self._meter.add_azure(len(pcm) / BYTES_PER_SECOND)
         segments = await asyncio.to_thread(self._recognize, pcm, reference)
         return _score(reference, segments)
 

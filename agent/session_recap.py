@@ -2,13 +2,14 @@
 
 web "summary" button ──► build() ──► SessionSummarizer (Sonnet) ──► learner.save_summary
 session shutdown     ──► finish() ── build() again only if turns came after the last one
-                                  └► learner.close()  (session ended_at)
+                                  └► learner.close()  (session ended_at, cost)
 """
 
 import logging
 
 from livekit.agents import AgentSession
 
+from costs import CostMeter
 from feedback_channel import FeedbackChannel
 from learner_model import LearnerModel
 from prompts import Level
@@ -26,12 +27,14 @@ class SessionRecap:
         feedback: FeedbackChannel,
         level: Level,
         learner: LearnerModel | None,
+        meter: CostMeter,
     ) -> None:
         self._session = session
+        self._meter = meter
         self._feedback = feedback
         self._level = level
         self._learner = learner  # None: anonymous, nothing saved
-        self._summarizer = SessionSummarizer()
+        self._summarizer = SessionSummarizer(meter=meter)
         self._turns_summarized = 0
 
     async def build(self) -> SessionSummary:
@@ -56,4 +59,4 @@ class SessionRecap:
                 await self.build()
         except Exception:
             log.exception("summary at shutdown failed")
-        await self._learner.close()
+        await self._learner.close(cost_json=self._meter.breakdown().model_dump_json())

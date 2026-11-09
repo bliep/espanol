@@ -102,14 +102,23 @@ class LearnerStore:
             level.value,
         )
 
-    async def end_session(self, session_id: UUID, summary: str | None) -> None:
-        """summary: SessionSummary JSON, or None to keep any summary saved earlier."""
+    async def end_session(self, session_id: UUID, summary: str | None, cost: str | None) -> None:
+        """summary: SessionSummary JSON, or None to keep any summary saved earlier.
+        cost: CostBreakdown JSON."""
         await self._pool.execute(
-            "update sessions set ended_at = now(), summary = coalesce($2::jsonb, summary)"
-            " where id = $1",
+            "update sessions set ended_at = now(), summary = coalesce($2::jsonb, summary),"
+            " cost = coalesce($3::jsonb, cost) where id = $1",
             session_id,
             summary,
+            cost,
         )
+
+    async def session_costs(self, since: datetime) -> list[dict[str, Any]]:
+        """CostBreakdown dicts of sessions started since `since`, all learners."""
+        rows = await self._pool.fetch(
+            "select cost from sessions where cost is not null and started_at >= $1", since
+        )
+        return [json.loads(r["cost"]) for r in rows]
 
     async def save_summary(self, session_id: UUID, summary: str) -> None:
         await self._pool.execute(

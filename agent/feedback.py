@@ -14,6 +14,7 @@ from typing import Any
 import anthropic
 from pydantic import BaseModel, Field
 
+from costs import CostMeter
 from prompts import Level
 
 FEEDBACK_MODEL = "claude-haiku-5-5"
@@ -100,8 +101,11 @@ Examples:
 
 
 class FeedbackExtractor:
-    def __init__(self, client: anthropic.AsyncAnthropic | None = None) -> None:
+    def __init__(
+        self, client: anthropic.AsyncAnthropic | None = None, meter: CostMeter | None = None
+    ) -> None:
         self._client = client or anthropic.AsyncAnthropic()
+        self._meter = meter
 
     async def extract(self, learner: str, tutor_prev: str, level: Level) -> Feedback:
         context = f"Tutor said before: {tutor_prev}\n" if tutor_prev else ""
@@ -113,6 +117,8 @@ class FeedbackExtractor:
             output_format=Feedback,
             **FEEDBACK_REQUEST_EXTRAS,
         )
+        if self._meter:
+            self._meter.add_claude(FEEDBACK_MODEL, response.usage)
         return _clean(response.parsed_output)
 
 

@@ -171,8 +171,8 @@ class LearnerModel:
     async def save_summary(self, summary_json: str) -> None:
         await self._store.save_summary(self._session_id, summary_json)
 
-    async def close(self, summary_json: str | None = None) -> None:
-        await self._store.end_session(self._session_id, summary_json)
+    async def close(self, summary_json: str | None = None, cost_json: str | None = None) -> None:
+        await self._store.end_session(self._session_id, summary_json, cost_json)
 
     async def _review(self, term: str, item: VocabItem, rating: fsrs.Rating, now: datetime) -> None:
         saved = await self._store.get_word(self._learner_id, term)

@@ -17,6 +17,7 @@ from livekit.agents import Agent, AgentSession, room_io
 from drills import DRILLS, Drill, DrillDeps
 from feedback_channel import FeedbackChannel
 from modes import DRILL_MODES, LessonMode, ModeRequest
+from turn_recorder import TurnRecorder
 from tutor_agents import RESUME, RolePlay, Tutor
 
 log = logging.getLogger("tutor.modes")
@@ -25,8 +26,15 @@ DEFAULT_TEXT_INPUT = room_io.TextInputOptions().text_input_cb  # LiveKit's own h
 
 
 class ModeController:
-    def __init__(self, session: AgentSession, feedback: FeedbackChannel, deps: DrillDeps) -> None:
+    def __init__(
+        self,
+        session: AgentSession,
+        feedback: FeedbackChannel,
+        deps: DrillDeps,
+        recorder: TurnRecorder | None = None,
+    ) -> None:
         self._session = session
+        self._recorder = recorder
         self._feedback = feedback
         self._deps = deps
         self._current: ModeRequest = ModeRequest(mode=LessonMode.CONVERSATION)
@@ -63,8 +71,8 @@ class ModeController:
         deps = self._deps
         match request.mode:
             case LessonMode.CONVERSATION:
-                return Tutor(deps.level, deps.lesson, RESUME)
+                return Tutor(deps.level, deps.lesson, RESUME, self._recorder)
             case LessonMode.ROLEPLAY:
-                return RolePlay(deps.level, deps.lesson, request.scenario)
+                return RolePlay(deps.level, deps.lesson, request.scenario, self._recorder)
             case _:
                 return DRILLS[request.mode](deps)

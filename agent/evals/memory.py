@@ -102,16 +102,20 @@ async def join(
     details: dict,
     room: rtc.Room | None = None,
     on_speech: Callable[[str], None] | None = None,
+    on_speech_start: Callable[[], None] | None = None,
 ) -> tuple[rtc.Room, str]:
     """Connects and waits for the tutor's greeting: only then are its RPCs and chat live.
 
     on_speech: called with the text of each tutor utterance.
+    on_speech_start: called when a tutor utterance starts (its first transcript chunk).
     """
     room = room or rtc.Room()
     greeted = asyncio.Event()
 
     def on_transcription(reader: rtc.TextStreamReader, _sender: str) -> None:
         greeted.set()
+        if on_speech_start:
+            on_speech_start()
         if on_speech:
             asyncio.ensure_future(_read_into(reader, on_speech))
 

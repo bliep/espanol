@@ -4,7 +4,7 @@ A voice-first Spanish tutor for English speakers. The tutor speaks Spanish; the 
 
 ## Current status
 
-- Current phase: **Phase 4 – Drills and pronunciation** (Phases 0–3 done; Phase 4 implemented, browser check pending)
+- Current phase: **Phase 5 – Polish and ship** (Phases 0–4 done; Phase 5 steps 1–6 implemented, deployment pending)
 - Update this line whenever a phase is finished.
 
 ## Architecture (cascaded voice pipeline)
@@ -30,6 +30,8 @@ We deliberately chose a cascade over a speech-to-speech model. We need an exact 
 Learner model (Phase 3): magic-link login (Supabase Auth); the token route verifies the Supabase JWT and sets the LiveKit identity to the user id. The agent loads the learner by that identity (`main.py open_learner`; non-UUID identities, e.g. evals, run without memory). Layers: `main.py` → `learner_model.py` (FSRS, matching, lesson) → `learner_store.py` (only module with SQL, asyncpg over the Supabase session pooler). Schema in `supabase/migrations/`. The session opener (due words + recent errors) goes into the prompt, Deepgram keyterms and the `lesson_context` RPC.
 
 Lesson modes (Phase 4): `set_lesson_mode` RPC → `mode_controller.py` swaps the session's Agent (LiveKit handoff): `Tutor` / `RolePlay` (`tutor_agents.py`, LLM) or a drill (`drills.py`). Drills are code-driven: Haiku generates items and judges translations (`drill_content.py`); repeat-after-me tees the STT input audio (`speech_capture.py`) to Azure (`pronunciation.py`, the only Azure SDK module, es-ES, continuous recognition + reference alignment). Drills speak verdicts built in code, raise `StopResponse` so the LLM never replies, publish on `tutor.drill`, and store `drill_attempts` + per-word `word_scores`. Typed drill answers come through a custom `text_input_cb` (LiveKit's default skips `on_user_turn_completed`). The feedback channel pauses during drills.
+
+Polish (Phase 5): `costs.py` meters every session (LiveKit session usage + direct Claude/Azure calls, price table with sources) → `session_cost` RPC, `sessions.cost`, `uv run python costs.py`. Listening support RPCs: `replay_slow` (second Cartesia TTS at 0.7×, audio-only `say`) and `translate_line` (Haiku, cached). Web: one top bar that wraps on phones, side panel becomes a drawer below `xl`, per-line Slow/EN buttons via `AgentMessageActionsContext` in the transcript, installable (app/manifest.ts, icons; no service worker). `RECORD_TURNS=1` saves spoken turns to `agent/evals/recordings/` (git-ignored) for the recorded-turn eval. Agent image: `agent/Dockerfile` (models baked in).
 
 ## Repo layout (target)
 
@@ -77,7 +79,11 @@ docs/         notes and plan.md
 - Agent memory e2e (login → token route → two sessions, 2nd opens with due words + errors; needs `main.py dev` and web dev running, ~2 min): `cd agent && uv run python evals/memory.py`
 - Agent pronunciation eval (Azure on Cartesia-synthesised audio, <$0.01): `cd agent && uv run python evals/pronunciation.py`
 - Agent translation eval (drill judge + item generator, ~$0.01/run): `cd agent && uv run python evals/translation.py --runs 3`. Run after drill prompt changes.
-- Agent drills e2e (all lesson modes vs live agent, incl. spoken repeat via a synthetic mic track; needs `main.py dev` and web dev, ~2 min): `cd agent && uv run python evals/drills.py`
+- Agent lesson modes e2e (all modes, slow replay, translation, cost vs live agent, incl. spoken repeat via a synthetic mic track; needs `main.py dev` and web dev, ~2 min): `cd agent && uv run python evals/lesson_modes.py`
+- Agent voice latency (spoken turns, end of speech → first tutor audio, plus session cost; needs both servers): `cd agent && uv run python evals/voice_latency.py`
+- Recorded turns (WER of production STT + expected corrections; uses `agent/evals/recordings/`, synthetic turns if empty): `cd agent && uv run python evals/recorded.py`. Record with `RECORD_TURNS=1 uv run python main.py dev`, then fix each JSON's `reference` and `expected_corrections`.
+- Costs over stored sessions: `cd agent && uv run python costs.py --days 30`
+- Don't run `next build` while `next dev` is running: it corrupts `.next` (restart dev afterwards).
 - Recast eval in role-play: add `--scenario restaurant` (or doctor, job_interview, hotel, directions).
 - Agent lint: `cd agent && uv run ruff check . && uv run ruff format .`
 - `web/` is a git submodule: fork `bliep/agent-starter-react`, branch `tutor` (our changes); remote `upstream` = `livekit-examples/agent-starter-react`. Use pnpm with its lockfile (npm resolves newer deps that break the build). GitHub account: `bliep`.

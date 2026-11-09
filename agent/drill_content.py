@@ -14,6 +14,7 @@ from typing import Any
 import anthropic
 from pydantic import BaseModel, Field
 
+from costs import CostMeter
 from feedback import VocabItem
 from modes import LessonMode
 from prompts import Level
@@ -62,8 +63,11 @@ _LENGTH: dict[LessonMode, str] = {
 
 
 class DrillItemGenerator:
-    def __init__(self, client: anthropic.AsyncAnthropic | None = None) -> None:
+    def __init__(
+        self, client: anthropic.AsyncAnthropic | None = None, meter: CostMeter | None = None
+    ) -> None:
         self._client = client or anthropic.AsyncAnthropic()
+        self._meter = meter
 
     async def generate(
         self,
@@ -89,6 +93,8 @@ class DrillItemGenerator:
             output_format=_Items,
             **DRILL_REQUEST_EXTRAS,
         )
+        if self._meter:
+            self._meter.add_claude(DRILL_MODEL, response.usage)
         return response.parsed_output.items[:count]
 
 
@@ -118,8 +124,11 @@ corrected: the learner's own answer, minimally fixed; do not replace it with the
 
 
 class TranslationJudge:
-    def __init__(self, client: anthropic.AsyncAnthropic | None = None) -> None:
+    def __init__(
+        self, client: anthropic.AsyncAnthropic | None = None, meter: CostMeter | None = None
+    ) -> None:
         self._client = client or anthropic.AsyncAnthropic()
+        self._meter = meter
 
     async def judge(
         self, source: str, expected: str, target: str, answer: str, level: Level
@@ -136,4 +145,6 @@ class TranslationJudge:
             output_format=TranslationVerdict,
             **DRILL_REQUEST_EXTRAS,
         )
+        if self._meter:
+            self._meter.add_claude(DRILL_MODEL, response.usage)
         return response.parsed_output

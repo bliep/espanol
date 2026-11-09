@@ -42,6 +42,8 @@ TTS_SPEED: dict[Level, float] = {
     Level.C1: 1.0,
 }
 
+SLOW_REPLAY_SPEED = 0.7  # "slow replay" button; Cartesia sonic-3.x accepts 0.6–1.5
+
 # Learners pause to search for words; allow long silences before ending a turn.
 MAX_ENDPOINTING_DELAY_S = 5.0
 
@@ -66,6 +68,13 @@ def build_llm() -> anthropic.LLM:
 def load_vad() -> vad.VAD:
     """Silero VAD; loaded once per worker process (slow)."""
     return silero.VAD.load()
+
+
+def build_slow_tts() -> cartesia.TTS:
+    """Same voice at replay speed, separate from the session's TTS (its speed is untouched)."""
+    return cartesia.TTS(
+        model=TTS_MODEL, language=TTS_LANGUAGE, voice=VOICE_BLANCA_ES, speed=SLOW_REPLAY_SPEED
+    )
 
 
 def build_session(vad_model: vad.VAD, level: Level, keyterms: list[str]) -> AgentSession:

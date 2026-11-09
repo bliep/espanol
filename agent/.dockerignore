@@ -1,0 +1,11 @@
+# Keep the LiveKit Cloud build context small and free of secrets and personal data.
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+.env
+.env.*
+tests/
+evals/
+requirements.txt

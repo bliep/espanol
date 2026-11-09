@@ -4,17 +4,17 @@ version = "0.1.0"
 description = "Spanish voice tutor agent (LiveKit Agents)"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=1.17.0",
     "asyncpg>=0.32.0",
     "azure-cognitiveservices-speech>=1.53.0",
     "fsrs>=6.3.2",
     "livekit-agents[anthropic,cartesia,deepgram,silero,turn-detector]>=1.8.11",
+    "pydantic>=2.14.3",
     "python-dotenv>=1.2.4",
 ]
 
 [dependency-groups]
 dev = [
-    "anthropic>=1.17.0",
-    "pydantic>=2.14.3",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.4.1.post1",
     "ruff>=0.17.4",

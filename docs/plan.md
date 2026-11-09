@@ -197,6 +197,15 @@ Each phase ends with something you can use, so you can stop after any of them. F
 - Scoring latency in drills: translation judge 1–2.5 s, Azure ~2.4 s after end of turn. Acceptable for drills (not on the conversation voice path).
 - Known limit: English prompts and corrections in EN→ES / ES→EN are read by the Spanish voice.
 
+**Phase 5 status (steps 1–6 implemented 2026-11-09; deployment pending):**
+
+- [x] Cost tracking per session (USD): LiveKit session usage (Sonnet tokens incl. cache, Deepgram audio, Cartesia characters) + direct Haiku/Sonnet/Azure calls + LiveKit minutes. Shown live in the app, saved in `sessions.cost`, `costs.py` report. Measured: spoken conversation ≈ $0.043/min (Cartesia 43%, LiveKit 25%, Deepgram 20%, Claude 12%); a drill-heavy session ≈ $0.065/min. Azure's price is an estimate ($1/h STT + $0.30/h pronunciation; its pricing page did not render numbers).
+- [x] Slow replay (0.7×, separate TTS, not added to the transcript) and per-line English translation (Haiku, cached), as buttons under each tutor line.
+- [x] Phone layout: one wrapping top bar, panel as a drawer below `xl`, hold-to-talk at the bottom on phones; checked at 390×844 and 1440×900 in headless Chromium. Installable (manifest, icons); no service worker (current Chrome/iOS install without one, and the tutor needs the network).
+- [x] Recorded-turn eval: `RECORD_TURNS=1` saves spoken turns locally; `evals/recorded.py` gives WER of production STT and correction recall. On synthetic turns Deepgram turned "Me gusta mucho las montañas" into "Me gustan…": the STT can hide learner errors even with smart formatting off. Real recordings will show how often.
+- [x] Latency: LiveKit's preemptive LLM generation is already on by default; spoken voice-to-voice median 513–684 ms, p90 ~790–816 ms (`evals/voice_latency.py`). Preemptive TTS not enabled (extra cost, target already met).
+- [ ] Deploy: agent to LiveKit Cloud (`agent/Dockerfile`), web to Vercel, Supabase redirect URL; then run the e2e evals against it and use it daily on the phone.
+
 ## Costs, risks and open questions
 
 Running costs are dominated by the models, not the framework; expect cents per minute of conversation.

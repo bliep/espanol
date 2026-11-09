@@ -2520,17 +2520,17 @@ name = "tutor-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "anthropic" },
     { name = "asyncpg" },
     { name = "azure-cognitiveservices-speech" },
     { name = "fsrs" },
     { name = "livekit-agents", extra = ["anthropic", "cartesia", "deepgram", "silero", "turn-detector"] },
+    { name = "pydantic" },
     { name = "python-dotenv" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "anthropic" },
-    { name = "pydantic" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -2538,17 +2538,17 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = ">=1.17.0" },
     { name = "asyncpg", specifier = ">=0.32.0" },
     { name = "azure-cognitiveservices-speech", specifier = ">=1.53.0" },
     { name = "fsrs", specifier = ">=6.3.2" },
     { name = "livekit-agents", extras = ["anthropic", "cartesia", "deepgram", "silero", "turn-detector"], specifier = ">=1.8.11" },
+    { name = "pydantic", specifier = ">=2.14.3" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "anthropic", specifier = ">=1.17.0" },
-    { name = "pydantic", specifier = ">=2.14.3" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "pytest-asyncio", specifier = ">=1.4.1.post1" },
     { name = "ruff", specifier = ">=0.17.4" },

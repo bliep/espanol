@@ -1,7 +1,7 @@
 """Lesson modes end to end against the live agent, as a throwaway logged-in learner.
 
 Run (needs `main.py dev` and `web` dev server running):
-    cd agent && uv run python evals/drills.py
+    cd agent && uv run python evals/lesson_modes.py
 
   translate_en  2 right answers (Haiku translates the prompt) + 1 wrong → scores split
   word_scores   RPC lists the drilled words
@@ -10,6 +10,8 @@ Run (needs `main.py dev` and `web` dev server running):
                 spoken answer (Cartesia audio published as a mic track) → Azure score
   roleplay      tutor speaks in role; feedback panel resumes
   drills        no feedback-panel messages while drilling
+  support       translate_line returns English, replay_slow is accepted,
+                session_cost has a total for every provider used
 
 Cost: a few cents. Takes ~2 minutes.
 """
@@ -42,6 +44,9 @@ from pronunciation import SAMPLE_RATE  # noqa: E402
 DRILL_TOPIC = "tutor.drill"  # agent/main.py
 RPC_SET_LESSON_MODE = "set_lesson_mode"
 RPC_WORD_SCORES = "word_scores"
+RPC_TRANSLATE = "translate_line"
+RPC_REPLAY_SLOW = "replay_slow"
+RPC_SESSION_COST = "session_cost"
 TRANSLATE_MODEL = "claude-haiku-5-5"
 
 EVENT_TIMEOUT_S = 40  # item generation + scoring
@@ -91,6 +96,11 @@ class Learner:
         for i in range(0, len(audio) - chunk, chunk):
             frame = rtc.AudioFrame(audio[i : i + chunk], SAMPLE_RATE, 1, samples)
             await self._source.capture_frame(frame)
+
+    def has_result(self) -> bool:
+        """A result for the current mode is waiting (events are only peeked)."""
+        pending = list(self.drill._queue)  # noqa: SLF001 (test helper)
+        return any(e["kind"] == "result" and e["mode"] == self.mode for e in pending)
 
     async def next(self, kind: str) -> dict:
         while True:
@@ -148,7 +158,8 @@ async def run(learner: Learner, http: aiohttp.ClientSession, results: list) -> N
     await learner.type(item["source"])
     await asyncio.sleep(NO_RESULT_WAIT_S)
     asked_aloud = any("voz alta" in s for s in learner.speech[spoken_before:])
-    check(results, "repeat refuses typing", asked_aloud and learner.drill.empty(), "")
+    scored = learner.has_result()
+    check(results, "repeat refuses typing", asked_aloud and not scored, f"{learner.speech[-2:]}")
 
     start = time.perf_counter()
     await learner.say(await synth(http, item["source"]))
@@ -166,6 +177,18 @@ async def run(learner: Learner, http: aiohttp.ClientSession, results: list) -> N
     await asyncio.sleep(NO_RESULT_WAIT_S)
     check(results, "no feedback during drills", feedback_in_drills == 0, f"{feedback_in_drills}")
     check(results, "roleplay feedback resumes", learner.feedback > 0, f"{learner.speech[-2:]}")
+
+    # Listening support and cost.
+    line = learner.speech[-1]
+    english = await learner.rpc(RPC_TRANSLATE, line)
+    check(results, "translate_line", bool(english) and english != line, f"{line!r} → {english!r}")
+    replay = await learner.rpc(RPC_REPLAY_SLOW, line)
+    check(results, "replay_slow", replay == "ok", replay)
+
+    cost = json.loads(await learner.rpc(RPC_SESSION_COST))
+    used = ("claude", "deepgram", "cartesia", "azure", "livekit")
+    ok = all(cost[p] > 0 for p in used) and cost["total"] > 0
+    check(results, "session_cost", ok, f"{cost}")
 
 
 async def main() -> int:
