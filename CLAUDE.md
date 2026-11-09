@@ -84,6 +84,8 @@ docs/         notes and plan.md
 - Deploy agent (LiveKit Cloud, eu-central): `cd agent && lk agent deploy`; status/logs: `lk agent status`, `lk agent logs`. Secrets: `lk agent update-secrets` (only the agent's keys; LIVEKIT_* are injected). A local `main.py dev` worker also registers as `tutor` in the same project, so dispatches may go to either.
 - Recorded turns (WER of production STT + expected corrections; uses `agent/evals/recordings/`, synthetic turns if empty): `cd agent && uv run python evals/recorded.py`. Record with `RECORD_TURNS=1 uv run python main.py dev`, then fix each JSON's `reference` and `expected_corrections`.
 - Costs over stored sessions: `cd agent && uv run python costs.py --days 30`
+- Web hosting: Vercel project `espanol-tutor` (https://espanol-tutor.vercel.app), deploys `tutor` on push. Env vars: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AGENT_NAME, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_JWKS_URL. Don't run `vercel link`/`env pull` in `web/` without care: `web/.env.local` is a symlink to the root `.env` and the CLI writes into it; deploy via git push, not `vercel deploy` from the local folder.
+- E2E evals against the hosted app: prefix with `WEB_URL=https://espanol-tutor.vercel.app` (stop any local `main.py dev` first).
 - Don't run `next build` while `next dev` is running: it corrupts `.next` (restart dev afterwards).
 - Recast eval in role-play: add `--scenario restaurant` (or doctor, job_interview, hotel, directions).
 - Agent lint: `cd agent && uv run ruff check . && uv run ruff format .`

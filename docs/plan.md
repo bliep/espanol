@@ -205,7 +205,8 @@ Each phase ends with something you can use, so you can stop after any of them. F
 - [x] Recorded-turn eval: `RECORD_TURNS=1` saves spoken turns locally; `evals/recorded.py` gives WER of production STT and correction recall. On synthetic turns Deepgram turned "Me gusta mucho las montañas" into "Me gustan…": the STT can hide learner errors even with smart formatting off. Real recordings will show how often.
 - [ ] Latency: NOT on target. LiveKit's own e2e_latency on the deployed agent (eu-central): normal spoken turns 1.4–1.7 s (end-of-turn wait 0.58 s + Sonnet first token 0.6–0.7 s + TTS/transport); 2 of 6 turns 5–6 s, when the turn detector waited the full 5 s max delay. Preemptive LLM generation (on by default) does not visibly help. An earlier client-side measurement (0.5–0.7 s, also in commit 2e7055b) was wrong: it counted late chunks of the previous reply. The agent now logs `tutor.latency - e2e` per reply. Options: lower the 5 s max end-of-turn delay, a faster tutor LLM, preemptive TTS.
 - [x] Agent deployed to LiveKit Cloud, `eu-central` (`agent/Dockerfile`, `agent/livekit.toml`; deploy with `cd agent && lk agent deploy`). Against it: `evals/lesson_modes.py` 10/10, `evals/memory.py` pass.
-- [ ] Web on Vercel, Supabase redirect URL; then daily use on the phone.
+- [x] Web on Vercel: https://espanol-tutor.vercel.app (project `espanol-tutor`, production branch `tutor`, 7 env vars). Fully hosted: `evals/memory.py` pass, `evals/lesson_modes.py` 10/10 (`WEB_URL=https://espanol-tutor.vercel.app`).
+- [ ] Supabase redirect URL for the hosted app; then daily use on the phone.
 
 ## Costs, risks and open questions
 
