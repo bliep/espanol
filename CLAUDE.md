@@ -80,7 +80,8 @@ docs/         notes and plan.md
 - Agent pronunciation eval (Azure on Cartesia-synthesised audio, <$0.01): `cd agent && uv run python evals/pronunciation.py`
 - Agent translation eval (drill judge + item generator, ~$0.01/run): `cd agent && uv run python evals/translation.py --runs 3`. Run after drill prompt changes.
 - Agent lesson modes e2e (all modes, slow replay, translation, cost vs live agent, incl. spoken repeat via a synthetic mic track; needs `main.py dev` and web dev, ~2 min): `cd agent && uv run python evals/lesson_modes.py`
-- Agent voice latency (spoken turns, end of speech → first tutor audio, plus session cost; needs both servers): `cd agent && uv run python evals/voice_latency.py`
+- Agent voice latency (drives spoken turns, prints session cost; needs both servers): `cd agent && uv run python evals/voice_latency.py`. Read the real latency from the agent's `tutor.latency - e2e` log lines, not the eval's client-side estimate.
+- Deploy agent (LiveKit Cloud, eu-central): `cd agent && lk agent deploy`; status/logs: `lk agent status`, `lk agent logs`. Secrets: `lk agent update-secrets` (only the agent's keys; LIVEKIT_* are injected). A local `main.py dev` worker also registers as `tutor` in the same project, so dispatches may go to either.
 - Recorded turns (WER of production STT + expected corrections; uses `agent/evals/recordings/`, synthetic turns if empty): `cd agent && uv run python evals/recorded.py`. Record with `RECORD_TURNS=1 uv run python main.py dev`, then fix each JSON's `reference` and `expected_corrections`.
 - Costs over stored sessions: `cd agent && uv run python costs.py --days 30`
 - Don't run `next build` while `next dev` is running: it corrupts `.next` (restart dev afterwards).

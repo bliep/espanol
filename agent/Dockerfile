@@ -35,4 +35,5 @@ WORKDIR /app
 COPY --from=build --chown=appuser:appuser /app /app
 USER appuser
 
-CMD ["uv", "run", "--no-dev", "main.py", "start"]
+# The venv's Python directly: `uv run` would need a writable cache, and appuser has no home.
+CMD ["/app/.venv/bin/python", "main.py", "start"]

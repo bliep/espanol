@@ -1,12 +1,16 @@
-"""Voice-to-voice latency, as the learner hears it, on spoken conversation turns.
+"""Spoken conversation turns against the live agent: drives load for latency, reports cost.
 
 Run (needs `main.py dev` and `web` dev server running):
     cd agent && uv run python evals/voice_latency.py
 
-  synthetic learner sentence on a mic track ──► end of speech (t0)
-  first tutor transcript chunk (synced to audio playout) ──► t1
-  latency = t1 − t0: turn detection + STT final + LLM first token + TTS first audio
-            + transport. Target ~800 ms (CLAUDE.md).
+  synthetic learner sentence on a mic track ──► agent replies ──► next sentence
+
+The authoritative latency is the agent's own "tutor.latency - e2e" log line per reply
+(LiveKit's e2e_latency: end of user speech ──► agent starts speaking; target ~800 ms):
+local `main.py dev` output, or `lk agent logs` for the deployed agent.
+
+The client-side estimate printed here (end of our audio ──► first tutor transcript
+chunk) is rough: it misattributes late chunks of a previous reply and reads too low.
 
 Cost: a few cents. Takes ~1.5 minutes.
 """
@@ -78,7 +82,8 @@ async def main() -> int:
     ordered = sorted(latencies)
     p90 = ordered[int(0.9 * (len(ordered) - 1))]
     median = statistics.median(latencies)
-    print(f"\nvoice-to-voice median {median:.0f} ms, p90 {p90:.0f} ms (target {TARGET_MS})")
+    print(f"\nclient-side estimate (rough): median {median:.0f} ms, p90 {p90:.0f} ms")
+    print("authoritative: the agent's 'tutor.latency - e2e' log lines")
     return 0 if median <= TARGET_MS else 1
 
 

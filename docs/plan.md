@@ -203,8 +203,9 @@ Each phase ends with something you can use, so you can stop after any of them. F
 - [x] Slow replay (0.7×, separate TTS, not added to the transcript) and per-line English translation (Haiku, cached), as buttons under each tutor line.
 - [x] Phone layout: one wrapping top bar, panel as a drawer below `xl`, hold-to-talk at the bottom on phones; checked at 390×844 and 1440×900 in headless Chromium. Installable (manifest, icons); no service worker (current Chrome/iOS install without one, and the tutor needs the network).
 - [x] Recorded-turn eval: `RECORD_TURNS=1` saves spoken turns locally; `evals/recorded.py` gives WER of production STT and correction recall. On synthetic turns Deepgram turned "Me gusta mucho las montañas" into "Me gustan…": the STT can hide learner errors even with smart formatting off. Real recordings will show how often.
-- [x] Latency: LiveKit's preemptive LLM generation is already on by default; spoken voice-to-voice median 513–684 ms, p90 ~790–816 ms (`evals/voice_latency.py`). Preemptive TTS not enabled (extra cost, target already met).
-- [ ] Deploy: agent to LiveKit Cloud (`agent/Dockerfile`), web to Vercel, Supabase redirect URL; then run the e2e evals against it and use it daily on the phone.
+- [ ] Latency: NOT on target. LiveKit's own e2e_latency on the deployed agent (eu-central): normal spoken turns 1.4–1.7 s (end-of-turn wait 0.58 s + Sonnet first token 0.6–0.7 s + TTS/transport); 2 of 6 turns 5–6 s, when the turn detector waited the full 5 s max delay. Preemptive LLM generation (on by default) does not visibly help. An earlier client-side measurement (0.5–0.7 s, also in commit 2e7055b) was wrong: it counted late chunks of the previous reply. The agent now logs `tutor.latency - e2e` per reply. Options: lower the 5 s max end-of-turn delay, a faster tutor LLM, preemptive TTS.
+- [x] Agent deployed to LiveKit Cloud, `eu-central` (`agent/Dockerfile`, `agent/livekit.toml`; deploy with `cd agent && lk agent deploy`). Against it: `evals/lesson_modes.py` 10/10, `evals/memory.py` pass.
+- [ ] Web on Vercel, Supabase redirect URL; then daily use on the phone.
 
 ## Costs, risks and open questions
 

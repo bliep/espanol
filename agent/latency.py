@@ -6,13 +6,17 @@ We collect them per turn and log one line once all three arrive:
   user stops ──► STT final ──► turn committed ──► LLM 1st token ──► TTS 1st audio
              └── stt_final ─┘
              └────────── eou ──────────────┘└─── llm_ttft ───┘└── tts_ttfb ──┘
-  total = eou + llm_ttft + tts_ttfb
+  total = eou + llm_ttft + tts_ttfb  (an upper bound: preemptive generation starts the
+          LLM before the turn is committed, so stages overlap)
+
+The true figure is LiveKit's per-reply e2e_latency (user stops ──► agent starts
+speaking), logged separately as "e2e" when the reply is added to the chat history.
 """
 
 import logging
 from dataclasses import dataclass
 
-from livekit.agents import AgentSession, MetricsCollectedEvent
+from livekit.agents import AgentSession, ConversationItemAddedEvent, MetricsCollectedEvent
 from livekit.agents.metrics import EOUMetrics, LLMMetrics, TTSMetrics
 
 TARGET_MS = 800
@@ -38,6 +42,18 @@ class LatencyLogger:
 
     def attach(self, session: AgentSession) -> None:
         session.on("metrics_collected", self._on_metrics)
+        session.on("conversation_item_added", self._on_item)
+
+    def _on_item(self, ev: ConversationItemAddedEvent) -> None:
+        """LiveKit's measured voice-to-voice latency of a reply to a spoken turn."""
+        metrics = getattr(ev.item, "metrics", None) or {}
+        e2e = metrics.get("e2e_latency")
+        if ev.item.role != "assistant" or e2e is None:
+            return
+
+        e2e_ms = e2e * 1000
+        verdict = "OK" if e2e_ms <= TARGET_MS else "SLOW"
+        log.info("e2e %s | %4.0f ms %s (target %d)", ev.item.id, e2e_ms, verdict, TARGET_MS)
 
     def _on_metrics(self, ev: MetricsCollectedEvent) -> None:
         m = ev.metrics
