@@ -169,6 +169,13 @@ Each phase ends with something you can use, so you can stop after any of them. F
 - [x] 30-turn typed chat (`agent/evals/long_chat.py`): stable, recasts correct, reply time flat
 - Latency: Sonnet 5.5 runs with thinking off at low effort (default high effort cost ~2.4 s to first token). Typed reply ~1.8 s as seen by the client, ~0.85 s agent-side; accepted for now. Revisit in Phase 5.
 
+**Phase 2 status (implemented 2026-11-08; browser check pending):**
+
+- [x] `record_feedback` as Claude Haiku 5.5 structured output, in parallel with the reply (a tool call on the tutor LLM would delay the voice). Prompt plus a code clean-up drop no-op corrections, English gaps restated as corrections, and sentence-length vocab. `agent/evals/feedback.py`: 98–100% over 3 runs.
+- [x] Published per turn on the `tutor.feedback` text stream. Live 30-turn chat: feedback 30/30, median ~1.0 s, p90 ~1.24 s (target 2 s); reply median unchanged (~1.8 s).
+- [x] Corrections side panel (web, xl screens and up): original → corrected + rule, new words, gloss.
+- [x] Session summary: `session_summary` RPC, Sonnet 5.5, ~7 s; 3–5 patterns with the learner's own examples, plus the session's vocab gaps. Saving it to the profile is Phase 3.
+
 ## Costs, risks and open questions
 
 Running costs are dominated by the models, not the framework; expect cents per minute of conversation.

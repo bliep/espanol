@@ -25,6 +25,8 @@ Browser (Next.js + LiveKit client)
 
 We deliberately chose a cascade over a speech-to-speech model. We need an exact learner transcript for corrections, a separate feedback channel, and per-language control of voice and speed. Do not switch to a realtime speech-to-speech model unless asked.
 
+`record_feedback` is Haiku structured output (`agent/feedback.py`), not a tool call on the tutor LLM: a tool call would sit inside the spoken turn. It is published on the `tutor.feedback` text stream; the session summary is the `session_summary` RPC (Sonnet).
+
 ## Repo layout (target)
 
 ```
@@ -64,7 +66,8 @@ docs/         notes and plan.md
 - Agent console (terminal mic, no web): `cd agent && uv run python main.py console`
 - Agent dev: `cd agent && uv run python main.py dev`
 - Agent eval (language policy, ~$0.02/run): `cd agent && uv run python evals/recast.py --runs 3`. Run after any prompt or LLM change.
-- Agent long chat (30 typed turns vs live agent, needs `main.py dev` running): `cd agent && uv run python evals/long_chat.py`
+- Agent feedback eval (extractor accuracy + latency, <$0.01/run): `cd agent && uv run python evals/feedback.py --runs 3`. Run after any feedback prompt change.
+- Agent long chat (30 typed turns vs live agent: reply + feedback latency, summary; needs `main.py dev` running): `cd agent && uv run python evals/long_chat.py`
 - Agent lint: `cd agent && uv run ruff check . && uv run ruff format .`
 - `web/` is a git submodule: fork `bliep/agent-starter-react`, branch `tutor` (our changes); remote `upstream` = `livekit-examples/agent-starter-react`. Use pnpm with its lockfile (npm resolves newer deps that break the build). GitHub account: `bliep`.
 - Web setup: `git submodule update --init && ln -sf ../.env web/.env.local && cd web && npx pnpm@9.15.9 install --frozen-lockfile`

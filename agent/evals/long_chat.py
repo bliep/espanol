@@ -6,12 +6,16 @@ Run (agent must be running: uv run python main.py dev):
   this script ──lk.chat──► LiveKit room ──► tutor agent (full pipeline incl. TTS)
               ◄─lk.transcription─────────────┘
 
+              ◄─tutor.feedback───────────────┘  (Phase 2 side panel)
+
 Reply time = typed turn sent → first transcription text, i.e. LLM first token plus
 TTS first audio; no STT or turn detection on the typed path. Voice latency is in the
 agent's own `turn … total … ms` log lines.
+Feedback time = typed turn sent → feedback message received.
 """
 
 import asyncio
+import json
 import os
 import statistics
 import sys
@@ -27,6 +31,11 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 AGENT_NAME = "tutor"  # agent/main.py
 CHAT_TOPIC = "lk.chat"
 TRANSCRIPTION_TOPIC = "lk.transcription"
+FEEDBACK_TOPIC = "tutor.feedback"  # agent/main.py
+FEEDBACK_TARGET_P90_MS = 2000  # Phase 2 done-when: corrections within 2 s
+LATE_FEEDBACK_WAIT_S = 3
+SUMMARY_RPC = "session_summary"  # agent/main.py
+SUMMARY_TIMEOUT_S = 30
 REPLY_TIMEOUT_S = 30
 JOIN_TIMEOUT_S = 30
 # Typed path, as the client sees it. Agent side is ~0.85 s (LLM ~0.75 + TTS ~0.1); the
@@ -107,7 +116,18 @@ async def main() -> int:
 
         asyncio.ensure_future(read())
 
+    # Feedback messages, keyed by the learner text they refer to.
+    feedback: dict[str, tuple[float, dict]] = {}
+
+    def on_feedback(reader: rtc.TextStreamReader, sender: str) -> None:
+        async def read() -> None:
+            message = json.loads(await reader.read_all())
+            feedback[message["learner"]] = (time.perf_counter(), message["feedback"])
+
+        asyncio.ensure_future(read())
+
     room.register_text_stream_handler(TRANSCRIPTION_TOPIC, on_transcription)
+    room.register_text_stream_handler(FEEDBACK_TOPIC, on_feedback)
     await room.connect(os.environ["LIVEKIT_URL"], _token(f"long-chat-{uuid.uuid4().hex[:6]}"))
     agent_identity = await _wait_for_agent(room)
 
@@ -116,9 +136,11 @@ async def main() -> int:
     print(f"tutor: {greeting}\n")
 
     times_ms: list[float] = []
+    sent_at: dict[str, float] = {}
     session_start = time.perf_counter()
     for i, turn in enumerate(LEARNER_TURNS, 1):
         sent = time.perf_counter()
+        sent_at[turn] = sent
         await room.local_participant.send_text(turn, topic=CHAT_TOPIC)
         try:
             started, text = await asyncio.wait_for(replies.get(), REPLY_TIMEOUT_S)
@@ -129,6 +151,8 @@ async def main() -> int:
         times_ms.append((started - sent) * 1000)
         print(f"{i:2d} {times_ms[-1]:5.0f} ms | {turn}\n          → {text}")
 
+    await asyncio.sleep(LATE_FEEDBACK_WAIT_S)
+    summary_ok = await report_summary(room, agent_identity)
     await room.disconnect()
 
     minutes = (time.perf_counter() - session_start) / 60
@@ -139,7 +163,55 @@ async def main() -> int:
         f"(target {TARGET_MEDIAN_MS}) | first 10 {statistics.median(first):.0f} ms, "
         f"last 10 {statistics.median(last):.0f} ms"
     )
-    return 0 if median <= TARGET_MEDIAN_MS else 1
+    feedback_ok = report_feedback(sent_at, feedback)
+    return 0 if median <= TARGET_MEDIAN_MS and feedback_ok and summary_ok else 1
+
+
+async def report_summary(room: rtc.Room, agent_identity: str) -> bool:
+    """Request the session summary like the web panel's button; True if it has patterns."""
+    start = time.perf_counter()
+    payload = await room.local_participant.perform_rpc(
+        destination_identity=agent_identity,
+        method=SUMMARY_RPC,
+        payload="",
+        response_timeout=SUMMARY_TIMEOUT_S,
+    )
+    summary = json.loads(payload)
+    print(f"\nsummary ({(time.perf_counter() - start) * 1000:.0f} ms): {summary['encouragement']}")
+    for pattern in summary["patterns"]:
+        print(f"   - {pattern['title']}: {pattern['examples'][:2]}")
+    print(f"   words: {[w['spanish'] for w in summary['new_words']]}")
+    return bool(summary["patterns"])
+
+
+def report_feedback(sent_at: dict[str, float], feedback: dict[str, tuple[float, dict]]) -> bool:
+    """Print corrections/vocab per turn and feedback latency; True if within target."""
+    print("\nfeedback:")
+    latencies = []
+    for turn, sent in sent_at.items():
+        if turn not in feedback:
+            print(f"   MISSING | {turn}")
+            continue
+
+        received, fb = feedback[turn]
+        latencies.append((received - sent) * 1000)
+        fixes = [f"{c['original']} → {c['corrected']}" for c in fb["corrections"]]
+        vocab = [v["spanish"] for v in fb["new_vocab"]]
+        print(f"   {latencies[-1]:5.0f} ms [{fb['user_language']}] {turn}")
+        if fixes or vocab:
+            print(f"            fix: {fixes} vocab: {vocab}")
+
+    if not latencies:
+        return False
+
+    latencies.sort()
+    p90 = latencies[int(0.9 * (len(latencies) - 1))]
+    missing = len(sent_at) - len(latencies)
+    print(
+        f"\nfeedback {len(latencies)}/{len(sent_at)} | median "
+        f"{statistics.median(latencies):.0f} ms, p90 {p90:.0f} ms (target {FEEDBACK_TARGET_P90_MS})"
+    )
+    return missing == 0 and p90 <= FEEDBACK_TARGET_P90_MS
 
 
 if __name__ == "__main__":
