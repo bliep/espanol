@@ -5,6 +5,7 @@ description = "Spanish voice tutor agent (LiveKit Agents)"
 requires-python = ">=3.12"
 dependencies = [
     "asyncpg>=0.32.0",
+    "azure-cognitiveservices-speech>=1.53.0",
     "fsrs>=6.3.2",
     "livekit-agents[anthropic,cartesia,deepgram,silero,turn-detector]>=1.8.11",
     "python-dotenv>=1.2.4",

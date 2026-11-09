@@ -115,3 +115,51 @@ def build_instructions(
 
 def build_greeting(words: list[Word] | None = None) -> str:
     return GREETING_REVIEW if words else GREETING
+
+
+class Scenario(StrEnum):
+    RESTAURANT = "restaurant"
+    DOCTOR = "doctor"
+    JOB_INTERVIEW = "job_interview"
+    HOTEL = "hotel"
+    DIRECTIONS = "directions"
+
+
+# Who the tutor plays and who the learner is, per role-play scenario.
+_SCENARIO_ROLES: dict[Scenario, str] = {
+    Scenario.RESTAURANT: "Eres camarera en un bar de tapas de Madrid. El alumno es un cliente.",
+    Scenario.DOCTOR: "Eres médica de cabecera en un centro de salud. El alumno es un paciente.",
+    Scenario.JOB_INTERVIEW: (
+        "Eres la responsable de recursos humanos de una empresa de Barcelona. "
+        "El alumno es un candidato en una entrevista de trabajo."
+    ),
+    Scenario.HOTEL: "Eres recepcionista en un hotel de Sevilla. El alumno es un huésped.",
+    Scenario.DIRECTIONS: (
+        "Eres una vecina de Valencia en la calle. El alumno es un turista que busca un sitio."
+    ),
+}
+
+_ROLEPLAY = """
+Juego de rol:
+- {role}
+- Habla como esa persona, con situaciones y preguntas típicas de la escena.
+- La política de idioma y las correcciones mandan sobre el papel: si responde en inglés,
+  reformúlalo en español y pídele que lo repita, igual que fuera del juego.
+- Reacciona primero a lo que dice el alumno, aunque se salga de la escena, y luego
+  llévalo de vuelta a ella con tu pregunta.
+- Sigue el límite de 2 frases: la reformulación (o tu reacción) y una pregunta de la escena.
+  Repite la frase completa del alumno en español cuando le falte una palabra.
+"""
+
+ROLEPLAY_GREETING = "Empieza la escena en tu papel con una frase corta y una pregunta."
+
+
+def build_roleplay_instructions(
+    level: Level,
+    scenario: Scenario,
+    words: list[Word] | None = None,
+    errors: list[RecentError] | None = None,
+) -> str:
+    """Conversation prompt plus the scenario role (memory and policy unchanged)."""
+    role = _ROLEPLAY.format(role=_SCENARIO_ROLES[scenario])
+    return build_instructions(level, words, errors) + role

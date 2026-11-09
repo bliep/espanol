@@ -18,6 +18,7 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import aiohttp
@@ -97,11 +98,24 @@ async def livekit_token(http: aiohttp.ClientSession, access_token: str | None) -
         return r.status, (await r.json() if r.status == HTTP_OK else {})
 
 
-async def join(details: dict, room: rtc.Room | None = None) -> tuple[rtc.Room, str]:
-    """Connects and waits for the tutor's greeting: only then are its RPCs and chat live."""
+async def join(
+    details: dict,
+    room: rtc.Room | None = None,
+    on_speech: Callable[[str], None] | None = None,
+) -> tuple[rtc.Room, str]:
+    """Connects and waits for the tutor's greeting: only then are its RPCs and chat live.
+
+    on_speech: called with the text of each tutor utterance.
+    """
     room = room or rtc.Room()
     greeted = asyncio.Event()
-    room.register_text_stream_handler(TRANSCRIPTION_TOPIC, lambda *_: greeted.set())
+
+    def on_transcription(reader: rtc.TextStreamReader, _sender: str) -> None:
+        greeted.set()
+        if on_speech:
+            asyncio.ensure_future(_read_into(reader, on_speech))
+
+    room.register_text_stream_handler(TRANSCRIPTION_TOPIC, on_transcription)
     await room.connect(details["serverUrl"], details["participantToken"])
 
     deadline = time.monotonic() + JOIN_TIMEOUT_S
@@ -112,6 +126,13 @@ async def join(details: dict, room: rtc.Room | None = None) -> tuple[rtc.Room, s
                 return room, p.identity
         await asyncio.sleep(0.5)
     raise TimeoutError("agent did not join; is `main.py dev` running?")
+
+
+async def _read_into(reader: rtc.TextStreamReader, callback: Callable[[str], None]) -> None:
+    try:
+        callback(await reader.read_all())
+    except rtc.StreamError:
+        pass  # utterance cut off by our own disconnect
 
 
 async def first_session(details: dict) -> None:

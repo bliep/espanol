@@ -16,9 +16,11 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import fsrs  # noqa: E402
+
 from feedback import Correction, ErrorCategory, Feedback, UserLanguage, VocabItem  # noqa: E402
 from learner_model import LearnerModel, term_of, used_terms  # noqa: E402
-from learner_store import LearnerStore  # noqa: E402
+from learner_store import DrillAttempt, LearnerStore  # noqa: E402
 from prompts import Level  # noqa: E402
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
@@ -141,3 +143,20 @@ async def test_word_inside_correction_is_not_recalled(db) -> None:
     await model.record_turn("Tengo la paraguas", fb(corrections=[wrong]))
 
     assert (await store.get_word(learner_id, "paraguas")).due == due_before
+
+
+async def test_drill_scores_per_word(db) -> None:
+    store, learner_id = db
+    model = await LearnerModel.open(store, learner_id, Level.A2)
+
+    repeat = DrillAttempt("repeat", "Hoy llevo paraguas.", "Hoy llevo paraguas.", "", 60, {})
+    await model.record_drill(repeat, [("Hoy", 100), ("llevo", 90), ("paraguas", 20)])
+    translate = DrillAttempt("translate_en", "I have an umbrella.", "Tengo un paraguas.", "", 0, {})
+    await model.record_drill(translate, [("paraguas", 0)], review=(UMBRELLA, fsrs.Rating.Again))
+
+    weakest = await model.weakest_words()
+    assert [(w.word, w.average, w.attempts) for w in weakest][:2] == [
+        ("paraguas", 10, 2),
+        ("llevo", 90, 1),
+    ]
+    assert await store.get_word(learner_id, "paraguas") is not None  # FSRS card created

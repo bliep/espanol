@@ -52,10 +52,17 @@ class FeedbackChannel:
         self._tutor_prev = ""
         self._history: list[FeedbackMessage] = []
         self._tasks: set[asyncio.Task[None]] = set()  # strong refs until done
+        self._paused = False  # drills: answers are scored by the drill instead
 
     @property
     def history(self) -> list[FeedbackMessage]:
         return list(self._history)
+
+    def pause(self) -> None:
+        self._paused = True
+
+    def resume(self) -> None:
+        self._paused = False
 
     def attach(self, session: AgentSession) -> None:
         session.on("conversation_item_added", self._on_item)
@@ -69,7 +76,7 @@ class FeedbackChannel:
         if item.role == ASSISTANT_ROLE:
             self._tutor_prev = text
             return
-        if item.role != USER_ROLE:
+        if item.role != USER_ROLE or self._paused:
             return
 
         task = asyncio.create_task(self._run(item.id, text, self._tutor_prev))

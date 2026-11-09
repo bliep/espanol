@@ -36,6 +36,32 @@ class ErrorRecord:
 
 
 @dataclass(frozen=True)
+class DrillAttempt:
+    mode: str  # modes.LessonMode value
+    prompt: str
+    expected: str
+    answer: str
+    score: float
+    details: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class WordScoreRecord:
+    term: str
+    word: str
+    score: float
+
+
+@dataclass(frozen=True)
+class WordStat:
+    """A word's drill scores over a period."""
+
+    word: str
+    average: float
+    attempts: int
+
+
+@dataclass(frozen=True)
 class ErrorStat:
     """One error category over a period, with its latest example."""
 
@@ -153,6 +179,47 @@ class LearnerStore:
             ErrorStat(ErrorCategory(r["category"]), r["n"], r["original"], r["corrected"])
             for r in rows
         ]
+
+    async def add_drill_attempt(
+        self,
+        learner_id: UUID,
+        session_id: UUID,
+        attempt: DrillAttempt,
+        words: list[WordScoreRecord],
+    ) -> None:
+        """One answered item and its per-word scores, atomically."""
+        async with self._pool.acquire() as conn, conn.transaction():
+            attempt_id = await conn.fetchval(
+                "insert into drill_attempts"
+                " (learner_id, session_id, mode, prompt, expected, answer, score, details)"
+                " values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) returning id",
+                learner_id,
+                session_id,
+                attempt.mode,
+                attempt.prompt,
+                attempt.expected,
+                attempt.answer,
+                attempt.score,
+                json.dumps(attempt.details),
+            )
+            await conn.executemany(
+                "insert into word_scores (learner_id, attempt_id, term, word, mode, score)"
+                " values ($1, $2, $3, $4, $5, $6)",
+                [(learner_id, attempt_id, w.term, w.word, attempt.mode, w.score) for w in words],
+            )
+
+    async def weakest_words(self, learner_id: UUID, since: datetime, limit: int) -> list[WordStat]:
+        """Words with the lowest average drill score since `since`, any mode."""
+        rows = await self._pool.fetch(
+            "select (array_agg(word order by created_at desc))[1] as word,"
+            " avg(score) as average, count(*) as attempts"
+            " from word_scores where learner_id = $1 and created_at >= $2"
+            " group by term order by average, attempts desc limit $3",
+            learner_id,
+            since,
+            limit,
+        )
+        return [WordStat(r["word"], round(r["average"], 1), r["attempts"]) for r in rows]
 
 
 def _word(row: asyncpg.Record) -> WordRecord:

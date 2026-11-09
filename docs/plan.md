@@ -186,6 +186,17 @@ Each phase ends with something you can use, so you can stop after any of them. F
 - [x] Summary saved on request and at shutdown; session `ended_at` set.
 - [x] `agent/evals/memory.py`: two sessions as a throwaway logged-in learner; the 2nd opens with the due word and the error. Passes.
 
+**Phase 4 status (implemented 2026-11-09; browser check pending):**
+
+- [x] Lesson modes switchable mid-call (web mode picker → `set_lesson_mode` RPC → LiveKit agent handoff): conversation, role-play, translate EN→ES, translate ES→EN, repeat after me.
+- [x] Role-play: 5 scenarios (tapas bar, doctor, job interview, hotel, directions); language policy and feedback panel unchanged. Recast eval `--scenario`: restaurant 92%, doctor 94% (3 runs) after making the policy override the role and keeping the 2-sentence limit.
+- [x] Translation drills: 8 Haiku-generated items per round from due words and recent error types; Haiku judge scores meaning (60%) and form (40%), target word use, minimal correction. Spoken verdicts are built in code. EN→ES reviews the target word in FSRS. `evals/translation.py`: 100% (3 runs) after telling the judge that valid alternatives (me llevo, el/mi) are not form errors.
+- [x] Repeat after me with Azure Pronunciation Assessment (es-ES, North Europe): learner audio teed from the STT input, ~1 s pre-roll, continuous recognition aligned to the reference, so pauses and omissions are handled. Typed answers are refused. `evals/pronunciation.py` 4/4 (correct 99, vowel changes flag the words, omissions flagged, a 2 s pause still complete). es-MX not compared: es-ES is the target variety.
+- [x] Stored and shown per word: `drill_attempts`, `word_scores`; drill panel colours each word by score and lists the weakest words (`word_scores` RPC).
+- [x] `evals/drills.py`: 7/7 checks against the live agent, including a spoken answer on a synthetic mic track (98.8).
+- Scoring latency in drills: translation judge 1–2.5 s, Azure ~2.4 s after end of turn. Acceptable for drills (not on the conversation voice path).
+- Known limit: English prompts and corrections in EN→ES / ES→EN are read by the Spanish voice.
+
 ## Costs, risks and open questions
 
 Running costs are dominated by the models, not the framework; expect cents per minute of conversation.

@@ -13,17 +13,21 @@ from uuid import UUID
 
 from dotenv import load_dotenv
 from livekit import agents, rtc
-from livekit.agents import Agent, AgentServer, JobContext, JobProcess
+from livekit.agents import AgentServer, JobContext, JobProcess, room_io
 
 import pipeline
+from drills import DrillDeps
 from feedback import FeedbackExtractor
 from feedback_channel import FeedbackChannel, FeedbackMessage
 from input_modes import InputController, InputMode
 from latency import LatencyLogger
 from learner_model import EMPTY_LESSON, LearnerModel, LessonContext
 from learner_store import LearnerStore
-from prompts import DEFAULT_LEVEL, Level, build_greeting, build_instructions
+from mode_controller import ModeController
+from modes import ModeRequest
+from prompts import DEFAULT_LEVEL, Level, build_greeting
 from session_recap import SessionRecap
+from tutor_agents import Tutor
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -37,21 +41,17 @@ RPC_PTT_END = "ptt_end"
 RPC_PTT_CANCEL = "ptt_cancel"
 RPC_SESSION_SUMMARY = "session_summary"  # returns SessionSummary JSON
 RPC_LESSON_CONTEXT = "lesson_context"  # returns LessonContext JSON
+RPC_SET_LESSON_MODE = "set_lesson_mode"  # payload: ModeRequest JSON
+RPC_WORD_SCORES = "word_scores"  # returns WeakWord JSON list
 RPC_OK = "ok"
 
 DB_URL_KEY = "SUPABASE_DB_URL"
 
-# Text stream topic for per-turn feedback (web/lib/tutor-feedback.ts).
+# Text stream topics (web/lib/tutor-feedback.ts, web/lib/tutor-drill.ts).
 FEEDBACK_TOPIC = "tutor.feedback"
+DRILL_TOPIC = "tutor.drill"
 
 log = logging.getLogger("tutor")
-
-
-class Tutor(Agent):
-    def __init__(self, level: Level, lesson: LessonContext) -> None:
-        words = [(w.spanish, w.english) for w in lesson.due_words]
-        errors = [(e.category.value, e.original, e.corrected) for e in lesson.recent_errors]
-        super().__init__(instructions=build_instructions(level, words, errors))
 
 
 def prewarm(proc: JobProcess) -> None:
@@ -104,6 +104,26 @@ def register_lesson_rpcs(
 
     participant.register_rpc_method(RPC_SESSION_SUMMARY, summarize)
     participant.register_rpc_method(RPC_LESSON_CONTEXT, opener)
+
+
+def register_mode_rpcs(
+    participant: rtc.LocalParticipant, modes: ModeController, learner: LearnerModel | None
+) -> None:
+    """Expose lesson mode switching and drill word scores to the web client."""
+
+    async def set_mode(data: rtc.RpcInvocationData) -> str:
+        try:
+            modes.set_mode(ModeRequest.model_validate_json(data.payload))
+        except ValueError as error:
+            raise rtc.RpcError(rtc.RpcError.ErrorCode.APPLICATION_ERROR, str(error)) from None
+        return RPC_OK
+
+    async def word_scores(_: rtc.RpcInvocationData) -> str:
+        weakest = await learner.weakest_words() if learner else []
+        return json.dumps([w.model_dump() for w in weakest])
+
+    participant.register_rpc_method(RPC_SET_LESSON_MODE, set_mode)
+    participant.register_rpc_method(RPC_WORD_SCORES, word_scores)
 
 
 async def open_learner(ctx: JobContext, level: Level) -> tuple[LearnerModel, LearnerStore] | None:
@@ -180,12 +200,24 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(shutdown)
 
-    await session.start(room=ctx.room, agent=Tutor(level, lesson))
-    register_input_rpcs(ctx.room.local_participant, InputController(session))
-    register_lesson_rpcs(ctx.room.local_participant, recap, lesson)
+    async def publish_drill(payload: str) -> None:
+        await ctx.room.local_participant.send_text(payload, topic=DRILL_TOPIC)
 
-    words = [w.spanish for w in lesson.due_words]
-    await session.generate_reply(instructions=build_greeting(words))
+    modes = ModeController(session, feedback, DrillDeps(level, lesson, learner, publish_drill))
+
+    # RPCs before start: the greeting tells clients the agent is ready for them.
+    participant = ctx.room.local_participant
+    register_input_rpcs(participant, InputController(session))
+    register_lesson_rpcs(participant, recap, lesson)
+    register_mode_rpcs(participant, modes, learner)
+
+    greeting = build_greeting([w.spanish for w in lesson.due_words])
+    text_input = room_io.TextInputOptions(text_input_cb=modes.on_text_input)
+    await session.start(
+        room=ctx.room,
+        agent=Tutor(level, lesson, greeting),
+        room_options=room_io.RoomOptions(text_input=text_input),
+    )
 
 
 if __name__ == "__main__":

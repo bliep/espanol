@@ -5,6 +5,8 @@
   record_turn() ──► vocab gap              → FSRS review "Again" (new card if needed)
                     due word used, no error → FSRS review "Good"
                     corrections            → error log
+  record_drill()──► drill attempt + per-word scores; FSRS review of the drilled word
+  weakest_words()─► lowest average drill scores (web panel)
   close()       ──► session end + summary
 
 Word matching is plain text: accents, case and a leading article are ignored, but
@@ -23,7 +25,13 @@ import fsrs
 from pydantic import BaseModel
 
 from feedback import ErrorCategory, Feedback, UserLanguage, VocabItem
-from learner_store import ErrorRecord, LearnerStore, WordRecord
+from learner_store import (
+    DrillAttempt,
+    ErrorRecord,
+    LearnerStore,
+    WordRecord,
+    WordScoreRecord,
+)
 from prompts import Level
 
 log = logging.getLogger("tutor.learner")
@@ -31,6 +39,8 @@ log = logging.getLogger("tutor.learner")
 DUE_WORDS_LIMIT = 15  # plan: 10–20 target words per session
 RECENT_ERRORS_WINDOW = timedelta(days=14)
 RECENT_ERROR_CATEGORIES = 3
+WEAK_WORDS_WINDOW = timedelta(days=30)
+WEAK_WORDS_LIMIT = 8
 
 Clock = Callable[[], datetime]
 
@@ -60,6 +70,14 @@ class LessonContext(BaseModel):
 
 
 EMPTY_LESSON = LessonContext(due_words=[], recent_errors=[])
+
+
+class WeakWord(BaseModel):
+    """Wire format of the word_scores RPC items (web/lib/tutor-drill.ts)."""
+
+    word: str
+    average: float  # 0–100
+    attempts: int
 
 
 def term_of(spanish: str) -> str:
@@ -130,6 +148,25 @@ class LearnerModel:
         wrong = " ".join(c.original for c in fb.corrections)
         for term in used_terms(learner, set(self._due)) - used_terms(wrong, set(self._due)):
             await self._review(term, self._due.pop(term), fsrs.Rating.Good, now)
+
+    async def record_drill(
+        self,
+        attempt: DrillAttempt,
+        words: list[tuple[str, float]],
+        review: tuple[VocabItem, fsrs.Rating] | None = None,
+    ) -> None:
+        """words: (display word, score 0–100); review: the drilled word and its FSRS rating."""
+        scores = [WordScoreRecord(term_of(w), w, score) for w, score in words if term_of(w)]
+        await self._store.add_drill_attempt(self._learner_id, self._session_id, attempt, scores)
+
+        if review:
+            item, rating = review
+            await self._review(term_of(item.spanish), item, rating, self._clock())
+
+    async def weakest_words(self) -> list[WeakWord]:
+        since = self._clock() - WEAK_WORDS_WINDOW
+        stats = await self._store.weakest_words(self._learner_id, since, WEAK_WORDS_LIMIT)
+        return [WeakWord(**asdict(s)) for s in stats]
 
     async def save_summary(self, summary_json: str) -> None:
         await self._store.save_summary(self._session_id, summary_json)

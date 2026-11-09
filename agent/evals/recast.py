@@ -4,6 +4,8 @@ Run: cd agent && uv run python evals/recast.py [--runs 3] [--memory]
 
 --memory adds a sample learner memory (due words, recent errors) to the prompt,
 as the learner model does for logged-in learners.
+--scenario NAME runs the same turns in a role-play (e.g. restaurant, doctor); the
+language policy must hold in role too.
 
   learner turn ──► tutor (production LLM + prompt) ──► reply
                                                          │
@@ -29,7 +31,12 @@ from livekit.agents import llm as lk  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import pipeline  # noqa: E402
-from prompts import DEFAULT_LEVEL, build_instructions  # noqa: E402
+from prompts import (  # noqa: E402
+    DEFAULT_LEVEL,
+    Scenario,
+    build_instructions,
+    build_roleplay_instructions,
+)
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
@@ -147,9 +154,18 @@ async def tutor_reply(tutor: lk.LLM, instructions: str, case: Case) -> str:
     return reply.strip()
 
 
-async def judge(client: anthropic.AsyncAnthropic, case: Case, reply: str) -> Verdict:
+async def judge(
+    client: anthropic.AsyncAnthropic, case: Case, reply: str, scene: str = ""
+) -> Verdict:
+    role = (
+        f"The tutor is in a role-play ({scene}). Staying in role and steering back to the "
+        "scene after reacting is correct, not off-topic.\n"
+        if scene
+        else ""
+    )
     prompt = (
-        "You grade a Spanish tutor's spoken reply to an English-speaking A2 learner.\n\n"
+        "You grade a Spanish tutor's spoken reply to an English-speaking A2 learner.\n"
+        f"{role}\n"
         f"Learner said: {case.learner!r}\n"
         f"Tutor replied: {reply!r}\n\n"
         "spanish_only: true if the reply is in Spanish. Quoting the learner's own English "
@@ -169,10 +185,10 @@ async def judge(client: anthropic.AsyncAnthropic, case: Case, reply: str) -> Ver
 
 
 async def evaluate(
-    tutor: lk.LLM, instructions: str, client: anthropic.AsyncAnthropic, case: Case
+    tutor: lk.LLM, instructions: str, client: anthropic.AsyncAnthropic, case: Case, scene: str
 ) -> Result:
     reply = await tutor_reply(tutor, instructions, case)
-    verdict = await judge(client, case, reply)
+    verdict = await judge(client, case, reply, scene)
     return Result(
         case=case,
         reply=reply,
@@ -213,16 +229,20 @@ async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=1, help="samples per case (LLM variance)")
     parser.add_argument("--memory", action="store_true", help="add a sample learner memory")
+    parser.add_argument("--scenario", choices=[s.value for s in Scenario], help="role-play")
     args = parser.parse_args()
 
     memory = (MEMORY_WORDS, MEMORY_ERRORS) if args.memory else (None, None)
     instructions = build_instructions(DEFAULT_LEVEL, *memory)
+    if args.scenario:
+        instructions = build_roleplay_instructions(DEFAULT_LEVEL, Scenario(args.scenario), *memory)
 
     tutor = pipeline.build_llm()
     client = anthropic.AsyncAnthropic()
 
+    sc = args.scenario or ""
     runs = [
-        list(await asyncio.gather(*(evaluate(tutor, instructions, client, c) for c in CASES)))
+        list(await asyncio.gather(*(evaluate(tutor, instructions, client, c, sc) for c in CASES)))
         for _ in range(args.runs)
     ]
     rate = report(runs)
