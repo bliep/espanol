@@ -4,6 +4,7 @@
                                                               │
                          publish(json) ◄──────────────────────┘  e.g. room text stream
                          history       ◄── kept for the session summary
+                         record(msg)   ◄── e.g. learner model (vocab, error log)
 
 The tutor's reply path never awaits any of this.
 """
@@ -22,6 +23,7 @@ from prompts import Level
 log = logging.getLogger("tutor.feedback")
 
 Publish = Callable[[str], Awaitable[None]]
+Record = Callable[["FeedbackMessage"], Awaitable[None]]
 
 USER_ROLE = "user"
 ASSISTANT_ROLE = "assistant"
@@ -36,10 +38,17 @@ class FeedbackMessage(BaseModel):
 
 
 class FeedbackChannel:
-    def __init__(self, extractor: FeedbackExtractor, level: Level, publish: Publish) -> None:
+    def __init__(
+        self,
+        extractor: FeedbackExtractor,
+        level: Level,
+        publish: Publish,
+        record: Record | None = None,
+    ) -> None:
         self._extractor = extractor
         self._level = level
         self._publish = publish
+        self._record = record
         self._tutor_prev = ""
         self._history: list[FeedbackMessage] = []
         self._tasks: set[asyncio.Task[None]] = set()  # strong refs until done
@@ -85,3 +94,11 @@ class FeedbackChannel:
             len(fb.corrections),
             len(fb.new_vocab),
         )
+
+        # After publishing: storage never delays the panel.
+        if not self._record:
+            return
+        try:
+            await self._record(message)
+        except Exception:
+            log.exception("recording feedback failed for turn %s", turn_id)

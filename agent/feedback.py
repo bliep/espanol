@@ -21,6 +21,11 @@ FEEDBACK_MAX_TOKENS = 2000
 FEEDBACK_REQUEST_EXTRAS: dict[str, Any] = {"output_config": {"effort": "low"}}
 MAX_VOCAB_WORDS = 4  # longer "vocab" is a whole sentence, not a word to learn
 
+# Words every learner knows; Haiku still lists them for English-only turns ("very" → muy).
+BASIC_WORDS = frozenset(
+    "muy mucho mucha muchos muchas bien mal y o pero es son está están soy estoy".split()
+)
+
 
 class UserLanguage(StrEnum):
     SPANISH = "es"
@@ -28,10 +33,23 @@ class UserLanguage(StrEnum):
     MIXED = "mixed"
 
 
+class ErrorCategory(StrEnum):
+    """Error log buckets (learner model); frequent ones become the next lesson goal."""
+
+    SER_ESTAR = "ser_estar"
+    AGREEMENT = "agreement"  # gender / number
+    PRETERITE_IMPERFECT = "preterite_imperfect"
+    CONJUGATION = "conjugation"  # wrong person, tense or mood
+    PREPOSITION = "preposition"
+    WORD_CHOICE = "word_choice"
+    OTHER = "other"
+
+
 class Correction(BaseModel):
     original: str = Field(description="The learner's wrong fragment, verbatim")
     corrected: str = Field(description="The same fragment, corrected")
     rule: str = Field(description="Why, in one short English line")
+    category: ErrorCategory
 
 
 class VocabItem(BaseModel):
@@ -60,6 +78,9 @@ corrections: real errors in the learner's Spanish only: grammar, agreement,
   an error, even when the tutor phrased it differently (era/estaba, fue/era).
   English words are never corrections: they go in new_vocab only.
   At most 3, most important first. Empty if the Spanish is correct.
+  category: ser_estar, agreement (gender/number), preterite_imperfect (wrong one of
+  the two past tenses), conjugation (wrong person, tense or mood), preposition,
+  word_choice, other.
 new_vocab: single words or short phrases (max 4 words) the learner lacked: English
   words used inside a Spanish sentence, words they asked about ("how do you say..."),
   and for an English-only turn the 1-3 key content words (nouns, verbs, adjectives)
@@ -72,7 +93,8 @@ Examples:
 "Ayer compré un... umbrella muy bonito." → corrections: [] (the Spanish is correct);
   new_vocab: [{{"spanish": "el paraguas", "english": "umbrella"}}]; user_language: "mixed"
 "El año pasado vivo en Londres." → corrections: [{{"original": "vivo",
-  "corrected": "viví", "rule": "A past time marker (el año pasado) needs a past tense."}}];
+  "corrected": "viví", "rule": "A past time marker (el año pasado) needs a past tense.",
+  "category": "conjugation"}}];
   new_vocab: []; user_language: "es"
 """
 
@@ -101,6 +123,7 @@ def _clean(fb: Feedback) -> Feedback:
     - vocab gaps restated as corrections: "is a teacher" → "es profesora" when
       new_vocab already has profesora/teacher
     - whole sentences listed as vocab: "trabajo con ordenadores todo el día"
+    - basic words listed as vocab: "muy", "son"
     """
     # "to travel" → {"travel"}; "teacher (female)" → {"teacher", "female"}
     gap_words = {
@@ -113,6 +136,10 @@ def _clean(fb: Feedback) -> Feedback:
         original_words = set(re.findall(r"[a-z']+", c.original.lower()))
         return not (gap_words & original_words)
 
-    vocab = [v for v in fb.new_vocab if len(v.spanish.split()) <= MAX_VOCAB_WORDS]
+    vocab = [
+        v
+        for v in fb.new_vocab
+        if len(v.spanish.split()) <= MAX_VOCAB_WORDS and v.spanish.lower() not in BASIC_WORDS
+    ]
     corrections = [c for c in fb.corrections if is_real(c)]
     return fb.model_copy(update={"corrections": corrections, "new_vocab": vocab})

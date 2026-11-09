@@ -68,12 +68,14 @@ def load_vad() -> vad.VAD:
     return silero.VAD.load()
 
 
-def build_session(vad_model: vad.VAD, level: Level) -> AgentSession:
+def build_session(vad_model: vad.VAD, level: Level, keyterms: list[str]) -> AgentSession:
+    """keyterms: the day's target words, so Deepgram recognises exactly what is practised."""
     stt = deepgram.STT(
         model=STT_MODEL,
         language=STT_LANGUAGE,
         smart_format=False,  # keep learner mistakes visible
         base_url=DEEPGRAM_EU_URL,
+        keyterm=keyterms or NOT_GIVEN,
     )
     tts = cartesia.TTS(
         model=TTS_MODEL,

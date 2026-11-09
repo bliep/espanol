@@ -6,20 +6,24 @@ Run: uv run python main.py console   (terminal mic/speaker, no web client)
 
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from uuid import UUID
 
 from dotenv import load_dotenv
 from livekit import agents, rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess
+from livekit.agents import Agent, AgentServer, JobContext, JobProcess
 
 import pipeline
 from feedback import FeedbackExtractor
-from feedback_channel import FeedbackChannel
+from feedback_channel import FeedbackChannel, FeedbackMessage
 from input_modes import InputController, InputMode
 from latency import LatencyLogger
-from prompts import DEFAULT_LEVEL, GREETING, Level, build_instructions
-from summary import SessionSummarizer
+from learner_model import EMPTY_LESSON, LearnerModel, LessonContext
+from learner_store import LearnerStore
+from prompts import DEFAULT_LEVEL, Level, build_greeting, build_instructions
+from session_recap import SessionRecap
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -32,9 +36,10 @@ RPC_PTT_START = "ptt_start"
 RPC_PTT_END = "ptt_end"
 RPC_PTT_CANCEL = "ptt_cancel"
 RPC_SESSION_SUMMARY = "session_summary"  # returns SessionSummary JSON
+RPC_LESSON_CONTEXT = "lesson_context"  # returns LessonContext JSON
 RPC_OK = "ok"
 
-TRANSCRIPT_ROLES = ("user", "assistant")
+DB_URL_KEY = "SUPABASE_DB_URL"
 
 # Text stream topic for per-turn feedback (web/lib/tutor-feedback.ts).
 FEEDBACK_TOPIC = "tutor.feedback"
@@ -43,8 +48,10 @@ log = logging.getLogger("tutor")
 
 
 class Tutor(Agent):
-    def __init__(self, level: Level) -> None:
-        super().__init__(instructions=build_instructions(level))
+    def __init__(self, level: Level, lesson: LessonContext) -> None:
+        words = [(w.spanish, w.english) for w in lesson.due_words]
+        errors = [(e.category.value, e.original, e.corrected) for e in lesson.recent_errors]
+        super().__init__(instructions=build_instructions(level, words, errors))
 
 
 def prewarm(proc: JobProcess) -> None:
@@ -84,25 +91,54 @@ def register_input_rpcs(participant: rtc.LocalParticipant, inputs: InputControll
     participant.register_rpc_method(RPC_PTT_CANCEL, handler(inputs.cancel_turn))
 
 
-def register_summary_rpc(
-    participant: rtc.LocalParticipant,
-    session: AgentSession,
-    feedback: FeedbackChannel,
-    level: Level,
+def register_lesson_rpcs(
+    participant: rtc.LocalParticipant, recap: SessionRecap, lesson: LessonContext
 ) -> None:
-    """Expose the end-of-session summary to the web client (returns SessionSummary JSON)."""
-    summarizer = SessionSummarizer()
+    """Expose the session opener and the end-of-session summary to the web client."""
 
     async def summarize(_: rtc.RpcInvocationData) -> str:
-        transcript = [
-            (item.role, item.text_content)
-            for item in session.history.items
-            if getattr(item, "role", None) in TRANSCRIPT_ROLES and item.text_content
-        ]
-        summary = await summarizer.summarize(feedback.history, transcript, level)
-        return summary.model_dump_json()
+        return (await recap.build()).model_dump_json()
+
+    async def opener(_: rtc.RpcInvocationData) -> str:
+        return lesson.model_dump_json()
 
     participant.register_rpc_method(RPC_SESSION_SUMMARY, summarize)
+    participant.register_rpc_method(RPC_LESSON_CONTEXT, opener)
+
+
+async def open_learner(ctx: JobContext, level: Level) -> tuple[LearnerModel, LearnerStore] | None:
+    """Learner model when the participant is logged in (identity = Supabase user id).
+
+    None (no memory, nothing saved) in console mode, for anonymous identities such as
+    evals/long_chat.py, without SUPABASE_DB_URL, or if the database is unreachable.
+    """
+    if ctx.is_fake_job():
+        return None
+
+    participant = await ctx.wait_for_participant()
+    try:
+        learner_id = UUID(participant.identity)
+    except ValueError:
+        log.info("anonymous participant %s: no learner memory", participant.identity)
+        return None
+
+    dsn = os.environ.get(DB_URL_KEY)
+    if not dsn:
+        log.warning("%s not set: no learner memory", DB_URL_KEY)
+        return None
+
+    try:
+        store = await LearnerStore.connect(dsn)
+    except Exception:
+        log.exception("learner store unreachable: no learner memory")
+        return None
+
+    try:
+        return await LearnerModel.open(store, learner_id, level), store
+    except Exception:
+        log.exception("opening learner %s failed: no learner memory", learner_id)
+        await store.close()
+        return None
 
 
 server = AgentServer(setup_fnc=prewarm)
@@ -113,20 +149,43 @@ async def entrypoint(ctx: JobContext) -> None:
     level = read_level(ctx.job.metadata)
     log.info("session level %s", level)
 
-    session = pipeline.build_session(ctx.proc.userdata[VAD_KEY], level)
+    await ctx.connect()
+    learner, store = await open_learner(ctx, level) or (None, None)
+    lesson = await learner.lesson() if learner else EMPTY_LESSON
+    log.info(
+        "lesson: %d due words, %d error types", len(lesson.due_words), len(lesson.recent_errors)
+    )
+
+    session = pipeline.build_session(ctx.proc.userdata[VAD_KEY], level, lesson.keyterms())
     LatencyLogger().attach(session)
 
     async def publish_feedback(payload: str) -> None:
         await ctx.room.local_participant.send_text(payload, topic=FEEDBACK_TOPIC)
 
-    feedback = FeedbackChannel(FeedbackExtractor(), level, publish_feedback)
+    async def record_feedback(message: FeedbackMessage) -> None:
+        await learner.record_turn(message.learner, message.feedback)
+
+    feedback = FeedbackChannel(
+        FeedbackExtractor(), level, publish_feedback, record_feedback if learner else None
+    )
     feedback.attach(session)
 
-    await session.start(room=ctx.room, agent=Tutor(level))
-    register_input_rpcs(ctx.room.local_participant, InputController(session))
-    register_summary_rpc(ctx.room.local_participant, session, feedback, level)
+    recap = SessionRecap(session, feedback, level, learner)
 
-    await session.generate_reply(instructions=GREETING)
+    # One callback: LiveKit runs shutdown callbacks concurrently; the store must outlive recap.
+    async def shutdown() -> None:
+        await recap.finish()
+        if store:
+            await store.close()
+
+    ctx.add_shutdown_callback(shutdown)
+
+    await session.start(room=ctx.room, agent=Tutor(level, lesson))
+    register_input_rpcs(ctx.room.local_participant, InputController(session))
+    register_lesson_rpcs(ctx.room.local_participant, recap, lesson)
+
+    words = [w.spanish for w in lesson.due_words]
+    await session.generate_reply(instructions=build_greeting(words))
 
 
 if __name__ == "__main__":

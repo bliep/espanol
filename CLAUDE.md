@@ -4,7 +4,7 @@ A voice-first Spanish tutor for English speakers. The tutor speaks Spanish; the 
 
 ## Current status
 
-- Current phase: **Phase 2 – Feedback channel** (Phases 0–1 done)
+- Current phase: **Phase 3 – Learner model** (Phases 0–2 done; Phase 3 implemented, browser login check pending)
 - Update this line whenever a phase is finished.
 
 ## Architecture (cascaded voice pipeline)
@@ -27,6 +27,8 @@ We deliberately chose a cascade over a speech-to-speech model. We need an exact 
 
 `record_feedback` is Haiku structured output (`agent/feedback.py`), not a tool call on the tutor LLM: a tool call would sit inside the spoken turn. It is published on the `tutor.feedback` text stream; the session summary is the `session_summary` RPC (Sonnet).
 
+Learner model (Phase 3): magic-link login (Supabase Auth); the token route verifies the Supabase JWT and sets the LiveKit identity to the user id. The agent loads the learner by that identity (`main.py open_learner`; non-UUID identities, e.g. evals, run without memory). Layers: `main.py` → `learner_model.py` (FSRS, matching, lesson) → `learner_store.py` (only module with SQL, asyncpg over the Supabase session pooler). Schema in `supabase/migrations/`. The session opener (due words + recent errors) goes into the prompt, Deepgram keyterms and the `lesson_context` RPC.
+
 ## Repo layout (target)
 
 ```
@@ -48,7 +50,7 @@ docs/         notes and plan.md
 
 - Python 3.12, `uv` for deps, type hints, `ruff` for lint/format.
 - TypeScript strict mode in `web/`; use `@livekit/components-react`.
-- Secrets live in `.env` (never commit). Expected keys: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `CARTESIA_API_KEY`, and later `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `SUPABASE_URL`, `SUPABASE_KEY`.
+- Secrets live in `.env` (never commit). Expected keys: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `CARTESIA_API_KEY`, and later `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` (browser), `SUPABASE_SECRET_KEY` (server/evals only), `SUPABASE_JWKS_URL` (token route), `SUPABASE_DB_URL` (agent; session pooler, not the IPv6-only direct host), and later `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`.
 - Target variety: Spain Spanish (es-ES): Castilian TTS voice, es-ES pronunciation locale.
 - Use EU regions/endpoints where a provider offers them (user is in the Netherlands).
 - Log per-stage latency (end of user speech → STT final → LLM first token → TTS first audio). Target: under ~800 ms voice-to-voice.
@@ -68,6 +70,9 @@ docs/         notes and plan.md
 - Agent eval (language policy, ~$0.02/run): `cd agent && uv run python evals/recast.py --runs 3`. Run after any prompt or LLM change.
 - Agent feedback eval (extractor accuracy + latency, <$0.01/run): `cd agent && uv run python evals/feedback.py --runs 3`. Run after any feedback prompt change.
 - Agent long chat (30 typed turns vs live agent: reply + feedback latency, summary; needs `main.py dev` running): `cd agent && uv run python evals/long_chat.py`
+- Agent tests (learner model; uses the Supabase DB with a throwaway user): `cd agent && uv run pytest -q`
+- DB migrations (applies new `supabase/migrations/*.sql` once each): `cd agent && uv run python migrate.py`
+- Agent memory e2e (login → token route → two sessions, 2nd opens with due words + errors; needs `main.py dev` and web dev running, ~2 min): `cd agent && uv run python evals/memory.py`
 - Agent lint: `cd agent && uv run ruff check . && uv run ruff format .`
 - `web/` is a git submodule: fork `bliep/agent-starter-react`, branch `tutor` (our changes); remote `upstream` = `livekit-examples/agent-starter-react`. Use pnpm with its lockfile (npm resolves newer deps that break the build). GitHub account: `bliep`.
 - Web setup: `git submodule update --init && ln -sf ../.env web/.env.local && cd web && npx pnpm@9.15.9 install --frozen-lockfile`

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv  # noqa: E402
 
-from feedback import Feedback, FeedbackExtractor, UserLanguage  # noqa: E402
+from feedback import ErrorCategory, Feedback, FeedbackExtractor, UserLanguage  # noqa: E402
 from prompts import DEFAULT_LEVEL  # noqa: E402
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
@@ -37,16 +37,19 @@ class Case:
     # Each inner tuple: one expected vocab item; any string must appear in `spanish`.
     vocab: tuple[tuple[str, ...], ...] = ()
     tutor_prev: str = ""
+    # Expected on some correction (error log bucket); None = not checked.
+    category: ErrorCategory | None = None
 
 
 CASES: tuple[Case, ...] = (
     Case("Ayer fui al supermercado y compré pan.", UserLanguage.SPANISH),
     Case("Me llamo Anuj y vivo en Ámsterdam.", UserLanguage.SPANISH),
     Case("El verano pasado fui a los Pirineos con mis amigos.", UserLanguage.SPANISH),
-    Case("Yo es muy cansado hoy.", UserLanguage.SPANISH, corrections=(("estoy",),)),
+    Case("Yo es muy cansado hoy.", UserLanguage.SPANISH, corrections=(("estoy",),),
+         category=ErrorCategory.SER_ESTAR),
     Case("Me gusta mucho las montañas.", UserLanguage.SPANISH, corrections=(("gustan",),)),
     Case("Mi verdura favorita es la pimiento.", UserLanguage.SPANISH,
-         corrections=(("el pimiento",),)),
+         corrections=(("el pimiento",),), category=ErrorCategory.AGREEMENT),
     Case("Ayer yo comí en un restaurante y la comida es muy buena.", UserLanguage.SPANISH,
          corrections=(("era", "estaba", "fue"),)),
     Case("Mi hermana is a teacher en Utrecht.", UserLanguage.MIXED,
@@ -105,6 +108,9 @@ def check(case: Case, fb: Feedback) -> list[str]:
     for expected in case.corrections:
         if not any(e in c for e in expected for c in corrected):
             problems.append(f"missing correction {expected}")
+    categories = [c.category for c in fb.corrections]
+    if case.category and case.category not in categories:
+        problems.append(f"category {case.category} not in {categories}")
 
     spanish = [v.spanish.lower() for v in fb.new_vocab]
     too_long = [s for s in spanish if len(s.split()) > MAX_VOCAB_WORDS]

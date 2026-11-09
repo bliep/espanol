@@ -1,0 +1,143 @@
+"""Learner model tests.
+
+Matching tests are pure. The flow test runs against the Supabase DB in .env
+(SUPABASE_DB_URL) with a throwaway auth user, deleted afterwards (rows cascade).
+"""
+
+import os
+import sys
+import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import asyncpg
+import pytest
+from dotenv import load_dotenv
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from feedback import Correction, ErrorCategory, Feedback, UserLanguage, VocabItem  # noqa: E402
+from learner_model import LearnerModel, term_of, used_terms  # noqa: E402
+from learner_store import LearnerStore  # noqa: E402
+from prompts import Level  # noqa: E402
+
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+DB_URL = os.environ.get("SUPABASE_DB_URL")
+
+UMBRELLA = VocabItem(spanish="el paraguas", english="umbrella")
+NEXT_DAY = timedelta(days=1)  # FSRS "Again" on a new card: due in minutes
+
+
+class Clock:
+    """Fake time the test moves forward."""
+
+    def __init__(self) -> None:
+        self.now = datetime.now(UTC)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+def test_term_of() -> None:
+    assert term_of("El Paraguas") == "paraguas"
+    assert term_of("¿Está?") == "esta"
+    assert term_of("la") == "la"  # a lone article is the word itself
+    assert term_of("ir de compras") == "ir de compras"
+
+
+def test_used_terms() -> None:
+    terms = {"paraguas", "ir de compras", "pan"}
+    assert used_terms("Hoy llevo mi PARAGUAS.", terms) == {"paraguas"}
+    assert used_terms("Voy a ir de compras", terms) == {"ir de compras"}
+    assert used_terms("Me gusta el panadero", terms) == set()  # whole words only
+
+
+def fb(
+    language: UserLanguage = UserLanguage.SPANISH,
+    vocab: list[VocabItem] | None = None,
+    corrections: list[Correction] | None = None,
+) -> Feedback:
+    return Feedback(
+        corrections=corrections or [],
+        new_vocab=vocab or [],
+        english_gloss="",
+        user_language=language,
+    )
+
+
+@pytest.fixture
+async def db():
+    if not DB_URL:
+        pytest.skip("SUPABASE_DB_URL not set")
+
+    conn = await asyncpg.connect(DB_URL, statement_cache_size=0)
+    learner_id = uuid.uuid4()
+    await conn.execute(
+        "insert into auth.users (id, aud, role, email) values ($1, 'authenticated',"
+        " 'authenticated', $2)",
+        learner_id,
+        f"test-{learner_id}@example.invalid",
+    )
+    store = await LearnerStore.connect(DB_URL)
+
+    yield store, learner_id
+
+    await store.close()
+    await conn.execute("delete from auth.users where id = $1", learner_id)
+    await conn.close()
+
+
+async def test_session_flow(db) -> None:
+    store, learner_id = db
+    clock = Clock()
+
+    # Session 1: a vocab gap and a ser/estar error.
+    first = await LearnerModel.open(store, learner_id, Level.A2, clock)
+    assert (await first.lesson()).is_empty
+
+    gap = fb(UserLanguage.MIXED, vocab=[UMBRELLA])
+    await first.record_turn("Hoy llevo un... umbrella", gap)
+    error = Correction(
+        original="es cansado",
+        corrected="está cansado",
+        rule="Temporary state: estar.",
+        category=ErrorCategory.SER_ESTAR,
+    )
+    await first.record_turn("Yo es cansado", fb(corrections=[error]))
+    await first.close('{"patterns": []}')
+
+    # Session 2, next day: opens with the due word and the recent error.
+    clock.now += NEXT_DAY
+    second = await LearnerModel.open(store, learner_id, Level.A2, clock)
+
+    lesson = await second.lesson()
+    assert lesson.due_words == [UMBRELLA]
+    assert lesson.keyterms() == ["paraguas"]
+    assert [(e.category, e.count) for e in lesson.recent_errors] == [(ErrorCategory.SER_ESTAR, 1)]
+
+    # Used correctly in Spanish → reviewed "Good", no longer due soon.
+    await second.record_turn("Sí, hoy llevo paraguas.", fb())
+    word = await store.get_word(learner_id, "paraguas")
+    assert word is not None and word.due > clock.now
+    await second.close()
+
+    # Same day again: nothing due.
+    third = await LearnerModel.open(store, learner_id, Level.A2, clock)
+    assert (await third.lesson()).due_words == []
+
+
+async def test_word_inside_correction_is_not_recalled(db) -> None:
+    store, learner_id = db
+    model = await LearnerModel.open(store, learner_id, Level.A2)
+    await model.record_turn("umbrella", fb(UserLanguage.ENGLISH, vocab=[UMBRELLA]))
+    due_before = (await store.get_word(learner_id, "paraguas")).due
+
+    wrong = Correction(
+        original="la paraguas",
+        corrected="el paraguas",
+        rule="Paraguas is masculine.",
+        category=ErrorCategory.AGREEMENT,
+    )
+    await model.record_turn("Tengo la paraguas", fb(corrections=[wrong]))
+
+    assert (await store.get_word(learner_id, "paraguas")).due == due_before

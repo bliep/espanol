@@ -1,6 +1,9 @@
 """Recast eval: does the tutor follow the language policy on fixed learner turns?
 
-Run: cd agent && uv run python evals/recast.py [--runs 3]
+Run: cd agent && uv run python evals/recast.py [--runs 3] [--memory]
+
+--memory adds a sample learner memory (due words, recent errors) to the prompt,
+as the learner model does for logged-in learners.
 
   learner turn ──► tutor (production LLM + prompt) ──► reply
                                                          │
@@ -33,6 +36,10 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 JUDGE_MODEL = "claude-haiku-5-5"
 MAX_SENTENCES = 3  # CLAUDE.md: spoken replies 1–3 sentences
 PASS_RATE_TARGET = 0.9  # replies are sampled; demand most, not all
+
+# Sample learner memory for --memory (shape of learner_model.LessonContext).
+MEMORY_WORDS = [("el paraguas", "umbrella"), ("perezoso", "lazy"), ("la playa", "beach")]
+MEMORY_ERRORS = [("ser_estar", "es cansado", "está cansado")]
 
 
 class Kind(StrEnum):
@@ -125,9 +132,9 @@ def count_sentences(text: str) -> int:
     return max(1, len(_SENTENCE_END.findall(text.strip())))
 
 
-async def tutor_reply(tutor: lk.LLM, case: Case) -> str:
+async def tutor_reply(tutor: lk.LLM, instructions: str, case: Case) -> str:
     ctx = lk.ChatContext()
-    ctx.add_message(role="system", content=build_instructions(DEFAULT_LEVEL))
+    ctx.add_message(role="system", content=instructions)
     for i, text in enumerate(case.context):
         ctx.add_message(role="assistant" if i % 2 == 0 else "user", content=text)
     ctx.add_message(role="user", content=case.learner)
@@ -161,8 +168,10 @@ async def judge(client: anthropic.AsyncAnthropic, case: Case, reply: str) -> Ver
     return response.parsed_output
 
 
-async def evaluate(tutor: lk.LLM, client: anthropic.AsyncAnthropic, case: Case) -> Result:
-    reply = await tutor_reply(tutor, case)
+async def evaluate(
+    tutor: lk.LLM, instructions: str, client: anthropic.AsyncAnthropic, case: Case
+) -> Result:
+    reply = await tutor_reply(tutor, instructions, case)
     verdict = await judge(client, case, reply)
     return Result(
         case=case,
@@ -203,13 +212,17 @@ def report(runs: list[list[Result]]) -> float:
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=1, help="samples per case (LLM variance)")
+    parser.add_argument("--memory", action="store_true", help="add a sample learner memory")
     args = parser.parse_args()
+
+    memory = (MEMORY_WORDS, MEMORY_ERRORS) if args.memory else (None, None)
+    instructions = build_instructions(DEFAULT_LEVEL, *memory)
 
     tutor = pipeline.build_llm()
     client = anthropic.AsyncAnthropic()
 
     runs = [
-        list(await asyncio.gather(*(evaluate(tutor, client, c) for c in CASES)))
+        list(await asyncio.gather(*(evaluate(tutor, instructions, client, c) for c in CASES)))
         for _ in range(args.runs)
     ]
     rate = report(runs)

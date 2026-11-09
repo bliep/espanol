@@ -176,6 +176,16 @@ Each phase ends with something you can use, so you can stop after any of them. F
 - [x] Corrections side panel (web, xl screens and up): original → corrected + rule, new words, gloss.
 - [x] Session summary: `session_summary` RPC, Sonnet 5.5, ~7 s; 3–5 patterns with the learner's own examples, plus the session's vocab gaps. Saving it to the profile is Phase 3.
 
+**Phase 3 status (implemented 2026-11-09; browser login check pending):**
+
+- [x] Supabase (EU, Frankfurt): `learners`, `sessions`, `vocab` (FSRS card per word), `errors`; RLS read-own. Migrations in `supabase/migrations/`, applied with `agent/migrate.py`.
+- [x] Magic-link login; token route verifies the Supabase JWT, LiveKit identity = user id. Removes the starter's insecure-route exception.
+- [x] Error categories on corrections (ser/estar, agreement, preterite/imperfect, conjugation, preposition, word choice, other). Feedback eval 98–100%, now also checks categories.
+- [x] FSRS (`py-fsrs`): a vocab gap reviews "Again" (new card if needed); a due word used in Spanish outside any corrected fragment reviews "Good". Plain-text matching (accents, case, articles ignored; no lemmatizer).
+- [x] Session opener: 15 most overdue words + top 3 error categories (14 days) → system prompt, Deepgram keyterms, greeting, and a "Today" section in the panel (`lesson_context` RPC). Recast eval with memory (`--memory`): 100% over 2×3 runs after moving the memory block ahead of the policy rules (89% when appended at the end).
+- [x] Summary saved on request and at shutdown; session `ended_at` set.
+- [x] `agent/evals/memory.py`: two sessions as a throwaway logged-in learner; the 2nd opens with the due word and the error. Passes.
+
 ## Costs, risks and open questions
 
 Running costs are dominated by the models, not the framework; expect cents per minute of conversation.
@@ -198,7 +208,7 @@ Running costs are dominated by the models, not the framework; expect cents per m
 **Open questions**
 
 - Which Spanish do you want to learn: Spain (es-ES) or Latin American (es-MX)? It sets voices, vocabulary and the pronunciation locale.
-- Just for you, or for other users too? A personal tool can skip auth and multi-tenancy.
+- ~~Just for you, or for other users too?~~ Decided: magic-link auth per learner (Phase 3).
 - Web only, or a phone app from the start?
 
 ## Sources
