@@ -1,6 +1,6 @@
 # Spanish Voice Tutor
 
-A voice-first Spanish tutor for English speakers. The tutor speaks Spanish; the learner replies by voice or text in Spanish, English, or a mix. It also runs the reverse: English prompts, Spanish answers. The full plan, rationale and roadmap are in `docs/plan.md`. Read it before starting a new phase.
+A voice-first Spanish tutor for English speakers. The tutor speaks Spanish; the learner replies by voice or text in Spanish, English, or a mix. It also runs the reverse: English prompts, Spanish answers. The full plan, rationale and roadmap are in `docs/plan.md`. Read it before starting a new phase. How the current system works (modules, client↔agent contract, data model, known limits) is in `docs/implementation.md`; keep it current when the implementation changes.
 
 ## Current status
 
