@@ -81,10 +81,12 @@ main.py ──► mode_controller / tutor_agents / drills ──► learner_mode
 | `lib/auth.ts`, `lib/server-auth.ts` | Supabase Auth in the browser (magic link) and on the server (JWT check). |
 | `lib/tutor-rpc.ts` | Typed client for every agent RPC. |
 | `lib/tutor-feedback.ts`, `lib/tutor-drill.ts`, `lib/tutor-level.ts` | Wire types mirroring the agent, plus stream subscriptions. |
-| `components/app/tutor-layout.tsx` | Call screen: top bar, transcript, panels. |
-| `components/app/lesson-workspace.tsx` | Feedback / drill panel (right column on wide screens, drawer on phones). |
-| `components/app/feedback-panel.tsx`, `drill-panel.tsx` | Corrections, summary, "Today"; drill progress and per-word scores. |
-| `components/app/mode-picker.tsx`, `push-to-talk.tsx`, `level-picker.tsx` | Controls. |
+| `components/app/tutor-layout.tsx` | Call screen: top bar, main area (feedback or drill), chat dock. |
+| `components/app/lesson-workspace.tsx` | Main area: feedback in conversation/role-play, drill progress in drills. |
+| `components/app/feedback-panel.tsx`, `drill-panel.tsx` | Corrections and new words (oldest first); drill progress and per-word scores. |
+| `components/app/chat-dock.tsx` | Compact transcript, chat input with mic / end controls, hold-to-talk button. |
+| `components/app/overlay.tsx`, `summary-overlay.tsx`, `today-overlay.tsx` | Overlays opened from the top bar: session summary, today's due words and mistakes. |
+| `components/app/mode-picker.tsx`, `push-to-talk.tsx`, `level-picker.tsx` | Controls (`push-to-talk.tsx`: input-mode switch and hold-to-talk button). |
 | `components/app/line-actions.tsx` | Slow / EN buttons under each tutor line. |
 | `components/app/session-cost.tsx` | Live cost line. |
 | `components/app/login-view.tsx` | Magic-link login. |
@@ -190,7 +192,7 @@ history ──► SessionSummarizer (Sonnet) on request / at shutdown
   - the prompt (§5);
   - the greeting;
   - Deepgram keyterms;
-  - the `lesson_context` RPC (the panel's "Today" section).
+  - the `lesson_context` RPC (the "Today" overlay).
 - **Per conversation turn (`record_turn()`):**
   - Each vocab gap is reviewed as FSRS **Again**, with a new card if needed. It also joins the
     session's practice set.
@@ -306,11 +308,18 @@ All payloads are JSON. The agent side is the source of truth; the TypeScript mir
   Unauthenticated requests get 401. Supabase redirect URLs must include the Vercel URL.
 - **Browser configuration:** `next.config.ts` maps `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` to
   `NEXT_PUBLIC_*` at build time, so the same `.env` serves both.
-- **Layout:**
-  - One top bar: log out, input mode or level, lesson mode and cost. It wraps on phones.
-  - On `xl` screens the panel is a right-hand column; below that it's a drawer with a toggle
-    button, and hold-to-talk moves to the bottom.
+- **Layout** (call screen, top to bottom; same on phones and desktop):
+  - Top bar: log out, Open mic / Push to talk switch, Today and Summary buttons, lesson mode,
+    cost. It wraps on phones. Today and Summary open as overlays.
+  - Main area: feedback (corrections, new words), oldest first and anchored to the bottom, so
+    the newest sits right above the chat. In drills it shows drill progress instead.
+  - Chat dock: a compact transcript (small text, tight spacing, no scrollbar: the scroller hid it
+    while auto-scrolling, which flickered as replies streamed), the chat input with mic and end
+    controls, then the hold-to-talk button.
+  - No audio visualizer.
   - Checked at 390×844 and 1440×900 in headless Chromium.
+- **Input mode:** every call starts in push-to-talk. The agent starts in open mic (the evals
+  rely on that), so the web app sends `set_input_mode` as soon as the agent is reachable.
 - **Agent join timeout:** 90 s (`AGENT_JOIN_TIMEOUT_MS` in `components/app/app.tsx`; the SDK
   default is 20 s). The cloud agent sleeps when idle on the free plan, and waking it takes longer
   than 20 s, so with the default the page gave up before the agent arrived.
