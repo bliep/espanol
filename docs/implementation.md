@@ -56,6 +56,7 @@ audio both ways, text streams from agent to client, and RPCs from client to agen
 | `learner_model.py` | Domain logic: lesson opener, FSRS reviews, word matching, drill recording. |
 | `learner_store.py` | The only module with SQL (asyncpg over the Supabase session pooler). |
 | `input_modes.py` | Open mic vs push-to-talk. |
+| `transcript_filter.py` | Spots turns transcribed in a non-Latin script (noise heard as Arabic etc.). |
 | `sentence_translator.py` | Haiku translation of a tutor line (cached). |
 | `costs.py` | Cost meter and price table; CLI report over stored sessions. |
 | `latency.py` | Per-turn latency logging (stage sum and LiveKit's `e2e_latency`). |
@@ -123,9 +124,18 @@ LiveKit dispatches agent "tutor" ──► main.entrypoint(ctx):
 |---|---|---|
 | VAD | Silero | Loaded once per worker in `prewarm`. |
 | Turn detection | LiveKit turn detector | `max_delay` 5 s (learners pause to search for words). |
-| STT | Deepgram Nova-3 | `language=multi` (EN/ES), `smart_format=False`, EU endpoint, `keyterm` = due words. |
+| STT | Deepgram Nova-3 | `language=multi` with `language_hint` es, en; `smart_format=False`, EU endpoint, `keyterm` = due words. |
 | LLM | Claude Sonnet 5.5 | Prompt caching; thinking off, effort low (first token ~0.6–0.9 s vs ~2.4 s by default). |
 | TTS | Cartesia Sonic 3.5 | Castilian voice "Blanca", speed by level (A1 0.85 … B2/C1 1.0). |
+
+`language=multi` recognises about 55 languages, and the hints only bias detection. Noise or
+mumbling sometimes still comes back in another script, e.g. Arabic. Turns whose transcript has
+letters but no Latin ones are dropped:
+- conversation and role-play agents raise `StopResponse` in `on_user_turn_completed`, so the turn
+  gets no reply, isn't added to history and never reaches the feedback panel;
+- drills ignore such an answer and keep the item open.
+
+The learner's transcript in the web app still shows what Deepgram heard.
 
 LiveKit's preemptive LLM generation is on by default. Input mode is open mic or push-to-talk
 (`input_modes.py`): push-to-talk switches turn detection to manual and commits the turn on release.

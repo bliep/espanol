@@ -31,6 +31,7 @@ from modes import LessonMode
 from prompts import Level
 from pronunciation import PronunciationAssessor, WordError, WordScore
 from speech_capture import SpeechCapture
+from transcript_filter import is_foreign_script
 
 log = logging.getLogger("tutor.drill")
 
@@ -154,6 +155,9 @@ class Drill(Agent):
         if not self._items or not answer:
             log.info("%s: answer ignored (round not ready)", self.mode)
             return  # round still generating, or nothing said
+        if is_foreign_script(answer):
+            log.info("%s: ignored answer in a non-Latin script: %s", self.mode, answer)
+            return  # noise transcribed as another language; the item stays open
 
         item = self._items[self._index]
         start = time.perf_counter()

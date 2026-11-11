@@ -16,6 +16,9 @@ from prompts import Level
 DEEPGRAM_EU_URL = "https://api.eu.deepgram.com/v1/listen"
 STT_MODEL = "nova-3"
 STT_LANGUAGE = "multi"  # EN/ES code-switching in one stream
+# multi recognises ~55 languages; hints bias detection toward ours (they don't restrict it,
+# so transcript_filter.py drops what still comes back in another script).
+STT_LANGUAGE_HINTS = ["es", "en"]
 
 LLM_MODEL = "claude-sonnet-5-5"
 
@@ -82,6 +85,7 @@ def build_session(vad_model: vad.VAD, level: Level, keyterms: list[str]) -> Agen
     stt = deepgram.STT(
         model=STT_MODEL,
         language=STT_LANGUAGE,
+        language_hint=STT_LANGUAGE_HINTS,
         smart_format=False,  # keep learner mistakes visible
         base_url=DEEPGRAM_EU_URL,
         keyterm=keyterms or NOT_GIVEN,

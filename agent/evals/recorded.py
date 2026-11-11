@@ -32,7 +32,7 @@ from dotenv import load_dotenv  # noqa: E402
 from synth_audio import synth  # noqa: E402
 
 from feedback import FeedbackExtractor  # noqa: E402
-from pipeline import STT_LANGUAGE, STT_MODEL  # noqa: E402
+from pipeline import STT_LANGUAGE, STT_LANGUAGE_HINTS, STT_MODEL  # noqa: E402
 from prompts import Level  # noqa: E402
 from pronunciation import SAMPLE_RATE  # noqa: E402
 from turn_recorder import RECORDINGS  # noqa: E402
@@ -85,7 +85,8 @@ async def synthetic_turns(http: aiohttp.ClientSession) -> list[Turn]:
 
 
 async def transcribe(http: aiohttp.ClientSession, pcm: bytes) -> tuple[str, float]:
-    params = {
+    params: list[tuple[str, str]] = [("language_hint", h) for h in STT_LANGUAGE_HINTS]
+    params += {
         "model": STT_MODEL,
         "language": STT_LANGUAGE,
         "smart_format": "false",  # keep learner mistakes (pipeline.py)
@@ -93,7 +94,7 @@ async def transcribe(http: aiohttp.ClientSession, pcm: bytes) -> tuple[str, floa
         "encoding": "linear16",
         "sample_rate": str(SAMPLE_RATE),
         "channels": "1",
-    }
+    }.items()
     headers = {"Authorization": f"Token {os.environ['DEEPGRAM_API_KEY']}"}
     start = time.perf_counter()
     async with http.post(DEEPGRAM_EU_LISTEN, params=params, headers=headers, data=pcm) as r:

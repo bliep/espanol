@@ -5,10 +5,11 @@ so switching modes mid-call starts the new mode with a spoken line. With a TurnR
 (RECORD_TURNS=1) their STT input is also saved for the eval set.
 """
 
+import logging
 from collections.abc import AsyncIterable
 
 from livekit import rtc
-from livekit.agents import Agent, ModelSettings
+from livekit.agents import Agent, ModelSettings, StopResponse, llm
 
 from learner_model import LessonContext
 from prompts import (
@@ -20,7 +21,10 @@ from prompts import (
     build_instructions,
     build_roleplay_instructions,
 )
+from transcript_filter import is_foreign_script
 from turn_recorder import TurnRecorder
+
+log = logging.getLogger("tutor.agents")
 
 RESUME = "Retoma la conversación libre con una frase corta y una pregunta."
 
@@ -45,6 +49,16 @@ class ConversationAgent(Agent):
         source = self._recorder.tee(audio) if self._recorder else audio
         async for event in Agent.default.stt_node(self, source, model_settings):
             yield event
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        # Noise transcribed as another language (e.g. Arabic): no reply, not in history,
+        # so the feedback panel never sees it either.
+        text = new_message.text_content or ""
+        if is_foreign_script(text):
+            log.info("ignored turn in a non-Latin script: %s", text)
+            raise StopResponse()
 
 
 class Tutor(ConversationAgent):
