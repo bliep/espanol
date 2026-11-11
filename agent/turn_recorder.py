@@ -54,8 +54,8 @@ class TurnRecorder:
             yield frame
 
     def _on_item(self, ev: ConversationItemAddedEvent) -> None:
-        if ev.item.role != USER_ROLE:
-            return
+        if getattr(ev.item, "role", None) != USER_ROLE:
+            return  # assistant messages and handoff items (mode switches)
         pcm = self._capture.take()
         heard = (getattr(ev.item, "text_content", None) or "").strip()
         if not pcm or not heard:

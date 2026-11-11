@@ -46,9 +46,11 @@ class LatencyLogger:
 
     def _on_item(self, ev: ConversationItemAddedEvent) -> None:
         """LiveKit's measured voice-to-voice latency of a reply to a spoken turn."""
-        metrics = getattr(ev.item, "metrics", None) or {}
-        e2e = metrics.get("e2e_latency")
-        if ev.item.role != "assistant" or e2e is None:
+        # Handoff items (mode switches) have no role or metrics.
+        if getattr(ev.item, "role", None) != "assistant":
+            return
+        e2e = (ev.item.metrics or {}).get("e2e_latency")
+        if e2e is None:
             return
 
         e2e_ms = e2e * 1000
