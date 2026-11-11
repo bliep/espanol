@@ -87,6 +87,7 @@ docs/         notes and plan.md
 - Web hosting: Vercel project `espanol-tutor` (https://espanol-tutor.vercel.app), deploys `tutor` on push. Env vars: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AGENT_NAME, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_JWKS_URL. Don't run `vercel link`/`env pull` in `web/` without care: `web/.env.local` is a symlink to the root `.env` and the CLI writes into it; deploy via git push, not `vercel deploy` from the local folder.
 - E2E evals against the hosted app: prefix with `WEB_URL=https://espanol-tutor.vercel.app` (stop any local `main.py dev` first).
 - Don't run `next build` while `next dev` is running: it corrupts `.next` (restart dev afterwards).
+- Agent-wait check (web keeps waiting for a sleeping cloud agent; Playwright, needs `uv run playwright install chromium` once): start `cd web && AGENT_NAME=tutor-absent npx pnpm@9.15.9 dev`, then `cd agent && uv run python evals/agent_wait.py`
 - Recast eval in role-play: add `--scenario restaurant` (or doctor, job_interview, hotel, directions).
 - Agent lint: `cd agent && uv run ruff check . && uv run ruff format .`
 - `web/` is a git submodule: fork `bliep/agent-starter-react`, branch `tutor` (our changes); remote `upstream` = `livekit-examples/agent-starter-react`. Use pnpm with its lockfile (npm resolves newer deps that break the build). GitHub account: `bliep`.

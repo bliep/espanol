@@ -301,6 +301,9 @@ All payloads are JSON. The agent side is the source of truth; the TypeScript mir
   - On `xl` screens the panel is a right-hand column; below that it's a drawer with a toggle
     button, and hold-to-talk moves to the bottom.
   - Checked at 390×844 and 1440×900 in headless Chromium.
+- **Agent join timeout:** 90 s (`AGENT_JOIN_TIMEOUT_MS` in `components/app/app.tsx`; the SDK
+  default is 20 s). The cloud agent sleeps when idle on the free plan, and waking it takes longer
+  than 20 s, so with the default the page gave up before the agent arrived.
 - **Installable:** manifest and icons; no service worker, because current Chrome and iOS install
   without one and the tutor needs the network.
 
@@ -364,6 +367,7 @@ Optional agent flag: `RECORD_TURNS=1`.
 | `evals/lesson_modes.py` | All modes, spoken repeat on a synthetic mic track, replay, translation, cost | agent + web |
 | `evals/long_chat.py` | 30 typed turns: reply/feedback latency, summary | agent |
 | `evals/voice_latency.py` | Drives spoken turns, prints session cost (latency: read agent logs) | agent + web |
+| `evals/agent_wait.py` | Page still waits after 35 s without an agent (cold-start tolerance); Playwright | web dev with `AGENT_NAME=tutor-absent` |
 
 - **Synthetic audio:** evals that need it use the tutor's own Cartesia voice (`evals/synth_audio.py`).
 - **Hosted runs:** end-to-end evals run against the hosted app with
@@ -388,6 +392,8 @@ Optional agent flag: `RECORD_TURNS=1`.
 
 ## 18. Known limits and open issues
 
+- **First call after idle is slow.** On LiveKit Cloud's free Build plan the agent sleeps when idle;
+  the next call waits 10–20 s or more for it to wake. The paid Ship plan keeps it warm.
 - **Latency is above target.** LiveKit's `e2e_latency` on the hosted agent:
   - normal spoken turns take 1.4–1.7 s (end-of-turn wait 0.58 s plus Sonnet first token 0.6–0.7 s);
   - some turns take 5–6 s, when the turn detector waits its full 5 s maximum.
