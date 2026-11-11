@@ -1,6 +1,6 @@
 # Spanish Voice Tutor
 
-A voice-first Spanish tutor for English speakers. The tutor speaks Spanish; the learner replies by voice or text in Spanish, English, or a mix. It also runs the reverse: English prompts, Spanish answers. The full plan, rationale and roadmap are in `docs/plan.md`. Read it before starting a new phase. How the current system works (modules, client↔agent contract, data model, known limits) is in `docs/implementation.md`; keep it current when the implementation changes.
+A voice-first Spanish tutor for English speakers. The tutor speaks Spanish; the learner speaks Spanish, and types in Spanish, English, or a mix. It also runs the reverse: English prompts, Spanish answers. The full plan, rationale and roadmap are in `docs/plan.md`. Read it before starting a new phase. How the current system works (modules, client↔agent contract, data model, known limits) is in `docs/implementation.md`; keep it current when the implementation changes.
 
 ## Current status
 
@@ -14,7 +14,7 @@ Browser (Next.js + LiveKit client)
   ⇄ LiveKit Cloud room (WebRTC audio + data channel)
   ⇄ Tutor agent (Python, LiveKit Agents):
        turn detection (Silero VAD + turn model)
-       → STT: Deepgram Nova-3, language=multi (EN/ES code-switching)
+       → STT: Deepgram Nova-3, language=es (spoken input is Spanish only; English via chat)
        → LLM: Claude Sonnet (tutor reply, streamed sentence by sentence)
        → TTS: Cartesia Sonic 3.5 (Spanish + English)
        ↳ Feedback extractor: Claude Haiku, runs in parallel

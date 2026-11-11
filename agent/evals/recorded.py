@@ -5,7 +5,7 @@ Run: cd agent && uv run python evals/recorded.py
   agent/evals/recordings/*.wav + .json (made with RECORD_TURNS=1, reference corrected by hand)
       │  or, if there are none yet, synthetic learner turns (Cartesia)
       ▼
-  Deepgram Nova-3, language=multi, smart_format off, EU (same settings as pipeline.py)
+  Deepgram Nova-3, Spanish-only, smart_format off, EU (same settings as pipeline.py)
       ├─ WER vs the reference: do learner mistakes survive transcription?
       └─ FeedbackExtractor on the transcript: are the expected corrections found?
 
@@ -32,7 +32,7 @@ from dotenv import load_dotenv  # noqa: E402
 from synth_audio import synth  # noqa: E402
 
 from feedback import FeedbackExtractor  # noqa: E402
-from pipeline import STT_LANGUAGE, STT_LANGUAGE_HINTS, STT_MODEL  # noqa: E402
+from pipeline import STT_LANGUAGE, STT_MODEL  # noqa: E402
 from prompts import Level  # noqa: E402
 from pronunciation import SAMPLE_RATE  # noqa: E402
 from turn_recorder import RECORDINGS  # noqa: E402
@@ -85,8 +85,7 @@ async def synthetic_turns(http: aiohttp.ClientSession) -> list[Turn]:
 
 
 async def transcribe(http: aiohttp.ClientSession, pcm: bytes) -> tuple[str, float]:
-    params: list[tuple[str, str]] = [("language_hint", h) for h in STT_LANGUAGE_HINTS]
-    params += {
+    params = {
         "model": STT_MODEL,
         "language": STT_LANGUAGE,
         "smart_format": "false",  # keep learner mistakes (pipeline.py)
@@ -94,7 +93,7 @@ async def transcribe(http: aiohttp.ClientSession, pcm: bytes) -> tuple[str, floa
         "encoding": "linear16",
         "sample_rate": str(SAMPLE_RATE),
         "channels": "1",
-    }.items()
+    }
     headers = {"Authorization": f"Token {os.environ['DEEPGRAM_API_KEY']}"}
     start = time.perf_counter()
     async with http.post(DEEPGRAM_EU_LISTEN, params=params, headers=headers, data=pcm) as r:

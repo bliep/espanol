@@ -126,13 +126,17 @@ LiveKit dispatches agent "tutor" ──► main.entrypoint(ctx):
 |---|---|---|
 | VAD | Silero | Loaded once per worker in `prewarm`. |
 | Turn detection | LiveKit turn detector | `max_delay` 5 s (learners pause to search for words). |
-| STT | Deepgram Nova-3 | `language=multi` with `language_hint` es, en; `smart_format=False`, EU endpoint, `keyterm` = due words. |
+| STT | Deepgram Nova-3 | `language=es` (spoken input is Spanish only; English via chat), `smart_format=False`, EU endpoint, `keyterm` = due words. |
 | LLM | Claude Sonnet 5.5 | Prompt caching; thinking off, effort low (first token ~0.6–0.9 s vs ~2.4 s by default). |
 | TTS | Cartesia Sonic 3.5 | Castilian voice "Blanca", speed by level (A1 0.85 … B2/C1 1.0). |
 
-`language=multi` recognises about 55 languages, and the hints only bias detection. Noise or
-mumbling sometimes still comes back in another script, e.g. Arabic. Turns whose transcript has
-letters but no Latin ones are dropped:
+Why Spanish-only: Deepgram has no "English or Spanish" setting. `language=multi` guesses among
+about 55 languages, and on the learner's recordings it produced Italian, Greek and Persian for
+"Me llamo Sonia" (language hints made no difference). `language=es` transcribed all of them
+correctly and still handles most English words; English sentences belong in the chat input.
+
+As a safety net, turns whose transcript has letters but no Latin ones (noise heard as another
+script) are dropped:
 - conversation and role-play agents raise `StopResponse` in `on_user_turn_completed`, so the turn
   gets no reply, isn't added to history and never reaches the feedback panel;
 - drills ignore such an answer and keep the item open.

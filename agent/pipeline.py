@@ -15,10 +15,11 @@ from prompts import Level
 # Deepgram EU region (user is in NL). Plugin converts https → wss.
 DEEPGRAM_EU_URL = "https://api.eu.deepgram.com/v1/listen"
 STT_MODEL = "nova-3"
-STT_LANGUAGE = "multi"  # EN/ES code-switching in one stream
-# multi recognises ~55 languages; hints bias detection toward ours (they don't restrict it,
-# so transcript_filter.py drops what still comes back in another script).
-STT_LANGUAGE_HINTS = ["es", "en"]
+# Spoken input is Spanish only; English goes through the chat input. Deepgram has no
+# "English or Spanish" setting: language=multi guesses among ~55 languages and turned the
+# learner's "Me llamo Sonia" into Italian, Greek or Persian (3 of 4 recordings, hints made
+# no difference); Spanish-only got all 4 right and still transcribes most English words.
+STT_LANGUAGE = "es"
 
 LLM_MODEL = "claude-sonnet-5-5"
 
@@ -85,7 +86,6 @@ def build_session(vad_model: vad.VAD, level: Level, keyterms: list[str]) -> Agen
     stt = deepgram.STT(
         model=STT_MODEL,
         language=STT_LANGUAGE,
-        language_hint=STT_LANGUAGE_HINTS,
         smart_format=False,  # keep learner mistakes visible
         base_url=DEEPGRAM_EU_URL,
         keyterm=keyterms or NOT_GIVEN,

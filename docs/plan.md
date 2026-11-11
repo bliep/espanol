@@ -208,6 +208,15 @@ Each phase ends with something you can use, so you can stop after any of them. F
 - [x] Web on Vercel: https://espanol-tutor.vercel.app (project `espanol-tutor`, production branch `tutor`, 7 env vars). Fully hosted: `evals/memory.py` pass, `evals/lesson_modes.py` 10/10 (`WEB_URL=https://espanol-tutor.vercel.app`).
 - [ ] Supabase redirect URL for the hosted app; then daily use on the phone.
 
+**Decision (2026-11-11): spoken input is Spanish only; English goes through the chat.**
+Deepgram has no "English or Spanish" setting. `language=multi` guesses among ~55 languages: on
+the learner's own recordings it turned "Me llamo Sonia" into Italian ("Mi chiamo"), Greek and
+Persian in 3 of 4 turns, and `language_hint=es,en` made no difference. `language=es` got all 4
+right (including a real "llama" for "llamo") and still transcribed most English and mixed test
+sentences; a sentence switching language mid-way can come back empty. STT is now
+`language=es`; the chat input says "Speak Spanish · type in English or Spanish". This replaces
+the code-switching-by-voice requirement above.
+
 ## Costs, risks and open questions
 
 Running costs are dominated by the models, not the framework; expect cents per minute of conversation.
