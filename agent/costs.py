@@ -137,10 +137,10 @@ async def report(days: int) -> None:
     """Totals over stored sessions (all learners)."""
     from dotenv import load_dotenv
 
-    from learner_store import LearnerStore
+    from learner_store import DbLogin, LearnerStore, connection_string
 
     load_dotenv(Path(__file__).parent.parent / ".env")
-    store = await LearnerStore.connect(os.environ["SUPABASE_DB_URL"])
+    store = await LearnerStore.connect(connection_string(os.environ, DbLogin.AGENT))
     costs = await store.session_costs(datetime.now(UTC) - timedelta(days=days))
     await store.close()
 

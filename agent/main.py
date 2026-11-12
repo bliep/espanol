@@ -24,7 +24,7 @@ from feedback_channel import FeedbackChannel, FeedbackMessage
 from input_modes import InputController, InputMode
 from latency import LatencyLogger
 from learner_model import EMPTY_LESSON, LearnerModel, LessonContext
-from learner_store import LearnerStore
+from learner_store import DbLogin, LearnerStore, connection_string
 from mode_controller import ModeController
 from modes import ModeRequest
 from prompts import DEFAULT_LEVEL, Level, build_greeting
@@ -53,7 +53,6 @@ RPC_REPLAY_SLOW = "replay_slow"  # payload: tutor line to re-speak slowly
 RPC_TRANSLATE = "translate_line"  # payload: tutor line; returns English
 RPC_OK = "ok"
 
-DB_URL_KEY = "SUPABASE_DB_URL"
 AZURE_KEY_ENV = "AZURE_SPEECH_KEY"  # repeat-after-me only; sessions run without it
 
 # Text stream topics (web/lib/tutor-feedback.ts, web/lib/tutor-drill.ts).
@@ -172,10 +171,10 @@ def register_support_rpcs(
 
 
 async def open_learner(ctx: JobContext, level: Level) -> tuple[LearnerModel, LearnerStore] | None:
-    """Learner model when the participant is logged in (identity = Supabase user id).
+    """Learner model when the participant is logged in (identity = Entra user id).
 
     None (no memory, nothing saved) in console mode, for anonymous identities such as
-    evals/long_chat.py, without SUPABASE_DB_URL, or if the database is unreachable.
+    evals/long_chat.py, without the Azure SQL login, or if the database is unreachable.
     """
     if ctx.is_fake_job():
         return None
@@ -187,13 +186,13 @@ async def open_learner(ctx: JobContext, level: Level) -> tuple[LearnerModel, Lea
         log.info("anonymous participant %s: no learner memory", participant.identity)
         return None
 
-    dsn = os.environ.get(DB_URL_KEY)
-    if not dsn:
-        log.warning("%s not set: no learner memory", DB_URL_KEY)
+    conn_str = connection_string(os.environ, DbLogin.AGENT)
+    if not conn_str:
+        log.warning("Azure SQL login not set: no learner memory")
         return None
 
     try:
-        store = await LearnerStore.connect(dsn)
+        store = await LearnerStore.connect(conn_str)
     except Exception:
         log.exception("learner store unreachable: no learner memory")
         return None

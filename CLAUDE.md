@@ -19,7 +19,8 @@ Browser (Next.js + LiveKit client)
        → TTS: Cartesia Sonic 3.5 (Spanish + English)
        ↳ Feedback extractor: Claude Haiku, runs in parallel
          → corrections/vocab sent to the UI over the data channel
-  Postgres (Supabase): profile, vocab (FSRS), error log, sessions
+  Azure SQL Database: profile, vocab (FSRS), error log, sessions
+  Entra External ID: login (Google, email + password)
   Azure Pronunciation Assessment: drill modes only
 ```
 
@@ -27,7 +28,7 @@ We deliberately chose a cascade over a speech-to-speech model. We need an exact 
 
 `record_feedback` is Haiku structured output (`agent/feedback.py`), not a tool call on the tutor LLM: a tool call would sit inside the spoken turn. It is published on the `tutor.feedback` text stream; the session summary is the `session_summary` RPC (Sonnet).
 
-Learner model (Phase 3): magic-link login (Supabase Auth); the token route verifies the Supabase JWT and sets the LiveKit identity to the user id. The agent loads the learner by that identity (`main.py open_learner`; non-UUID identities, e.g. evals, run without memory). Layers: `main.py` → `learner_model.py` (FSRS, matching, lesson) → `learner_store.py` (only module with SQL, asyncpg over the Supabase session pooler). Schema in `supabase/migrations/`. The session opener (due words + recent errors) goes into the prompt, Deepgram keyterms and the `lesson_context` RPC.
+Learner model (Phase 3; moved from Supabase to Azure on 2026-11-12): login with Microsoft Entra External ID (MSAL redirect; Google or email + password); the token route verifies the Entra ID token and sets the LiveKit identity to the `oid` claim. The agent loads the learner by that identity (`main.py open_learner`; non-UUID identities, e.g. `evals/long_chat.py`, run without memory). Layers: `main.py` → `learner_model.py` (FSRS, matching, lesson) → `learner_store.py` (only module with SQL, `mssql-python` to Azure SQL in worker threads; retries while the paused free-offer database resumes). Schema in `db/migrations/` (T-SQL). Agent login `tutor_agent` (read/write rows); migrations use the admin login. Evals sign in a fixed user headlessly via a second app registration with native authentication (`evals/entra_login.py`). The session opener (due words + recent errors) goes into the prompt, Deepgram keyterms and the `lesson_context` RPC.
 
 Lesson modes (Phase 4): `set_lesson_mode` RPC → `mode_controller.py` swaps the session's Agent (LiveKit handoff): `Tutor` / `RolePlay` (`tutor_agents.py`, LLM) or a drill (`drills.py`). Drills are code-driven: Haiku generates items and judges translations (`drill_content.py`); repeat-after-me tees the STT input audio (`speech_capture.py`) to Azure (`pronunciation.py`, the only Azure SDK module, es-ES, continuous recognition + reference alignment). Drills speak verdicts built in code, raise `StopResponse` so the LLM never replies, publish on `tutor.drill`, and store `drill_attempts` + per-word `word_scores`. Typed drill answers come through a custom `text_input_cb` (LiveKit's default skips `on_user_turn_completed`). The feedback channel pauses during drills.
 
@@ -54,7 +55,7 @@ docs/         notes and plan.md
 
 - Python 3.12, `uv` for deps, type hints, `ruff` for lint/format.
 - TypeScript strict mode in `web/`; use `@livekit/components-react`.
-- Secrets live in `.env` (never commit). Expected keys: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `CARTESIA_API_KEY`, and later `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` (browser), `SUPABASE_SECRET_KEY` (server/evals only), `SUPABASE_JWKS_URL` (token route), `SUPABASE_DB_URL` (agent; session pooler, not the IPv6-only direct host), `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION` (`northeurope`; West Europe was unavailable).
+- Secrets live in `.env` (never commit). Expected keys: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `CARTESIA_API_KEY`, `AZURE_SQL_SERVER`, `AZURE_SQL_DATABASE`, `AZURE_SQL_USER`, `AZURE_SQL_PASSWORD` (agent), `AZURE_SQL_ADMIN_USER`, `AZURE_SQL_ADMIN_PASSWORD` (migrations only), `ENTRA_TENANT_ID`, `ENTRA_TENANT_SUBDOMAIN`, `ENTRA_CLIENT_ID` (web app), `ENTRA_EVAL_CLIENT_ID`, `EVAL_USER_EMAIL`, `EVAL_USER_PASSWORD` (evals), `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION` (`northeurope`; West Europe was unavailable).
 - Target variety: Spain Spanish (es-ES): Castilian TTS voice, es-ES pronunciation locale.
 - Use EU regions/endpoints where a provider offers them (user is in the Netherlands).
 - Log per-stage latency (end of user speech → STT final → LLM first token → TTS first audio). Target: under ~800 ms voice-to-voice.
@@ -69,13 +70,14 @@ docs/         notes and plan.md
 
 ## Commands (fill in as they exist)
 
+- Azure: subscription `espanol` (personal account), resource group `espanol_rg`; SQL server in Germany West Central (North/West Europe weren't accepting new servers). Entra tenant `learnespanol`: `az login --tenant <ENTRA_TENANT_ID> --allow-no-subscriptions` for Graph.
 - Agent console (terminal mic, no web): `cd agent && uv run python main.py console`
 - Agent dev: `cd agent && uv run python main.py dev`
 - Agent eval (language policy, ~$0.02/run): `cd agent && uv run python evals/recast.py --runs 3`. Run after any prompt or LLM change.
 - Agent feedback eval (extractor accuracy + latency, <$0.01/run): `cd agent && uv run python evals/feedback.py --runs 3`. Run after any feedback prompt change.
 - Agent long chat (30 typed turns vs live agent: reply + feedback latency, summary; needs `main.py dev` running): `cd agent && uv run python evals/long_chat.py`
-- Agent tests (learner model; uses the Supabase DB with a throwaway user): `cd agent && uv run pytest -q`
-- DB migrations (applies new `supabase/migrations/*.sql` once each): `cd agent && uv run python migrate.py`
+- Agent tests (learner model; uses the Azure SQL DB with a throwaway learner): `cd agent && uv run pytest -q`
+- DB migrations (applies new `db/migrations/*.sql` once each, admin login): `cd agent && uv run python migrate.py`
 - Agent memory e2e (login → token route → two sessions, 2nd opens with due words + errors; needs `main.py dev` and web dev running, ~2 min): `cd agent && uv run python evals/memory.py`
 - Agent pronunciation eval (Azure on Cartesia-synthesised audio, <$0.01): `cd agent && uv run python evals/pronunciation.py`
 - Agent translation eval (drill judge + item generator, ~$0.01/run): `cd agent && uv run python evals/translation.py --runs 3`. Run after drill prompt changes.
@@ -84,10 +86,9 @@ docs/         notes and plan.md
 - Deploy agent (LiveKit Cloud, eu-central): `cd agent && lk agent deploy`; status/logs: `lk agent status`, `lk agent logs`. Secrets: `lk agent update-secrets` (only the agent's keys; LIVEKIT_* are injected). A local `main.py dev` worker also registers as `tutor` in the same project, so dispatches may go to either.
 - Recorded turns (WER of production STT + expected corrections; uses `agent/evals/recordings/`, synthetic turns if empty): `cd agent && uv run python evals/recorded.py`. Record with `RECORD_TURNS=1 uv run python main.py dev`, then fix each JSON's `reference` and `expected_corrections`.
 - Costs over stored sessions: `cd agent && uv run python costs.py --days 30`
-- Web hosting: Vercel project `espanol-tutor` (https://espanol-tutor.vercel.app), deploys `tutor` on push. Env vars: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AGENT_NAME, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_JWKS_URL. Don't run `vercel link`/`env pull` in `web/` without care: `web/.env.local` is a symlink to the root `.env` and the CLI writes into it; deploy via git push, not `vercel deploy` from the local folder.
+- Web hosting: Vercel project `espanol-tutor` (https://espanol-tutor.vercel.app), deploys `tutor` on push. Env vars: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AGENT_NAME, ENTRA_TENANT_ID, ENTRA_TENANT_SUBDOMAIN, ENTRA_CLIENT_ID, ENTRA_EVAL_CLIENT_ID. Don't run `vercel link`/`env pull` in `web/` without care: `web/.env.local` is a symlink to the root `.env` and the CLI writes into it; deploy via git push, not `vercel deploy` from the local folder.
 - E2E evals against the hosted app: prefix with `WEB_URL=https://espanol-tutor.vercel.app` (stop any local `main.py dev` first).
 - Don't run `next build` while `next dev` is running: it corrupts `.next` (restart dev afterwards).
-- Agent-wait check (web keeps waiting for a sleeping cloud agent; Playwright, needs `uv run playwright install chromium` once): start `cd web && AGENT_NAME=tutor-absent npx pnpm@9.15.9 dev`, then `cd agent && uv run python evals/agent_wait.py`
 - Recast eval in role-play: add `--scenario restaurant` (or doctor, job_interview, hotel, directions).
 - Agent lint: `cd agent && uv run ruff check . && uv run ruff format .`
 - `web/` is a git submodule: fork `bliep/agent-starter-react`, branch `tutor` (our changes); remote `upstream` = `livekit-examples/agent-starter-react`. Use pnpm with its lockfile (npm resolves newer deps that break the build). GitHub account: `bliep`.

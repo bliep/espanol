@@ -217,6 +217,13 @@ sentences; a sentence switching language mid-way can come back empty. STT is now
 `language=es`; the chat input says "Speak Spanish · type in English or Spanish". This replaces
 the code-switching-by-voice requirement above.
 
+**Decision (2026-11-12): Azure instead of Supabase for data and login.** Learner data now lives
+in Azure SQL Database (serverless free offer, Germany West Central) and login is Microsoft Entra
+External ID (Google, plus email + password; Apple later). Existing Supabase data was dropped.
+Azure SQL was chosen over Azure Database for PostgreSQL because the free offer doesn't expire; the
+cost was rewriting the store and schema in T-SQL. Google Cloud (Cloud SQL + Identity Platform) was
+considered and rejected. The Phase 3 notes below describe the original Supabase setup.
+
 ## Costs, risks and open questions
 
 Running costs are dominated by the models, not the framework; expect cents per minute of conversation.

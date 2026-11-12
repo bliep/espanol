@@ -1,6 +1,6 @@
 # Spanish Voice Tutor: current implementation
 
-State as of 2026-11-09, after Phase 5. Covers how the system works today: components, data flow, the
+State as of 2026-11-12, after Phase 5 and the move from Supabase to Azure. Covers how the system works today: components, data flow, the
 contract between client and agent, the data model, and the known limits. The roadmap and its reasons
 are in `plan.md`. Commands and conventions are in `CLAUDE.md`.
 
@@ -10,15 +10,15 @@ are in `plan.md`. Commands and conventions are in `CLAUDE.md`.
 Phone / desktop browser                       LiveKit Cloud (EU)
 ┌──────────────────────────────┐   WebRTC    ┌──────────────────────────────────────────────┐
 │ Next.js app (Vercel)         │◄──audio────►│ Room                                         │
-│  login (Supabase Auth)       │◄──text─────►│  ▲                                           │
+│  login (Entra External ID)   │◄──text─────►│  ▲                                           │
 │  transcript, feedback/drill  │◄──RPC──────►│  │ Tutor agent (Python, LiveKit Agents)      │
 │  panels, mode picker, cost   │             │  │ eu-central, image from agent/Dockerfile   │
 └──────────┬───────────────────┘             └──┼───────────────────────────────────────────┘
-           │ POST /api/token (Supabase JWT)     │
+           │ POST /api/token (Entra ID token)   │
            ▼                                    │  Deepgram (EU) · Claude · Cartesia · Azure
   token route verifies JWT ──► LiveKit token    │
-  identity = Supabase user id                   ▼
-                                     Supabase Postgres (Frankfurt, session pooler)
+  identity = Entra object id                    ▼
+                                     Azure SQL Database (Germany West Central, free offer)
                                      learners · sessions · vocab · errors · drill_attempts · word_scores
 ```
 
@@ -27,8 +27,11 @@ Phone / desktop browser                       LiveKit Cloud (EU)
 - **Agent:** `agent/`, one Python process per worker. It handles audio, LLM calls, scoring and
   persistence. It is hosted on LiveKit Cloud (`eu-central`), agent id in `agent/livekit.toml`,
   dispatch name `tutor`.
-- **Data and auth:** Supabase. Postgres holds the learner model, and Supabase Auth handles accounts
-  and magic links.
+- **Data:** Azure SQL Database `tutor` (serverless free offer, pauses after 60 min idle),
+  resource group `espanol_rg`, subscription `espanol`.
+- **Auth:** Microsoft Entra External ID, tenant `learnespanol` (`espanol`). App `espanol-web`
+  (SPA) uses user flow `signin` (Google, or email + password). App `espanol-evals` (native
+  authentication) uses user flow `eval-signin` for the headless eval user.
 
 The browser never talks to the database or to the model providers. Everything goes through the room:
 audio both ways, text streams from agent to client, and RPCs from client to agent.
@@ -54,20 +57,20 @@ audio both ways, text streams from agent to client, and RPCs from client to agen
 | `summary.py` | Sonnet end-of-session summary (3–5 patterns, new words). |
 | `session_recap.py` | Builds the summary on request or at shutdown; closes the session row. |
 | `learner_model.py` | Domain logic: lesson opener, FSRS reviews, word matching, drill recording. |
-| `learner_store.py` | The only module with SQL (asyncpg over the Supabase session pooler). |
+| `learner_store.py` | The only module with SQL (`mssql-python` to Azure SQL, run in worker threads). |
 | `input_modes.py` | Open mic vs push-to-talk. |
 | `transcript_filter.py` | Spots turns transcribed in a non-Latin script (noise heard as Arabic etc.). |
 | `sentence_translator.py` | Haiku translation of a tutor line (cached). |
 | `costs.py` | Cost meter and price table; CLI report over stored sessions. |
 | `latency.py` | Per-turn latency logging (stage sum and LiveKit's `e2e_latency`). |
 | `turn_recorder.py` | Opt-in recording of spoken turns for the eval set (`RECORD_TURNS=1`). |
-| `migrate.py` | Applies `supabase/migrations/*.sql` once each. |
+| `migrate.py` | Applies `db/migrations/*.sql` once each (admin login). |
 | `tests/`, `evals/` | pytest (learner model) and evals (see §13). |
 
 Layering inside the agent:
 
 ```text
-main.py ──► mode_controller / tutor_agents / drills ──► learner_model ──► learner_store ──► Postgres
+main.py ──► mode_controller / tutor_agents / drills ──► learner_model ──► learner_store ──► Azure SQL
                                   │                          (FSRS, matching)     (SQL only)
                                   └──► drill_content / feedback / summary ──► Claude
                                   └──► pronunciation ──► Azure Speech SDK
@@ -78,7 +81,7 @@ main.py ──► mode_controller / tutor_agents / drills ──► learner_mode
 | File | Responsibility |
 |---|---|
 | `app/api/token/route.ts` | Issues LiveKit tokens to logged-in learners only. |
-| `lib/auth.ts`, `lib/server-auth.ts` | Supabase Auth in the browser (magic link) and on the server (JWT check). |
+| `lib/auth.ts`, `lib/server-auth.ts` | Entra login in the browser (MSAL, redirect) and on the server (ID token check). |
 | `lib/tutor-rpc.ts` | Typed client for every agent RPC. |
 | `lib/tutor-feedback.ts`, `lib/tutor-drill.ts`, `lib/tutor-level.ts` | Wire types mirroring the agent, plus stream subscriptions. |
 | `components/app/tutor-layout.tsx` | Call screen: top bar, main area (feedback or drill), chat dock. |
@@ -89,7 +92,7 @@ main.py ──► mode_controller / tutor_agents / drills ──► learner_mode
 | `components/app/mode-picker.tsx`, `push-to-talk.tsx`, `level-picker.tsx` | Controls (`push-to-talk.tsx`: input-mode switch and hold-to-talk button). |
 | `components/app/line-actions.tsx` | Slow / EN buttons under each tutor line. |
 | `components/app/session-cost.tsx` | Live cost line. |
-| `components/app/login-view.tsx` | Magic-link login. |
+| `components/app/login-view.tsx` | Login button (to the Entra sign-in page). |
 | `app/manifest.ts`, `public/icons/` | Installable web app. |
 | `hooks/use-*.ts` | One hook per concern (auth, feedback, drill, mode, cost, RPC client…). |
 
@@ -100,7 +103,7 @@ change: it renders optional per-message actions from `AgentMessageActionsContext
 
 ```text
 browser: login ──► POST /api/token {room_config: agent "tutor", metadata {"level": "B1"}}
-token route: verify Supabase JWT ──► LiveKit token (identity = user id) ──► join room
+token route: verify Entra ID token ──► LiveKit token (identity = Entra object id) ──► join room
 LiveKit dispatches agent "tutor" ──► main.entrypoint(ctx):
 
   level  = dispatch metadata (default A2)
@@ -303,15 +306,17 @@ All payloads are JSON. The agent side is the source of truth; the TypeScript mir
 
 ## 12. Web client
 
-- **Auth:** the browser uses the publishable key and sends a magic link that returns to the page's
-  origin. The token route then:
-  1. checks `Authorization: Bearer <access token>` against `SUPABASE_JWKS_URL` (ES256, issuer
-     `<SUPABASE_URL>/auth/v1`, audience `authenticated`);
-  2. issues a 15-minute LiveKit token whose identity is the user id.
+- **Auth:** MSAL (`@azure/msal-browser`) redirects to the Entra sign-in page (Google or email +
+  password) and back; the login is kept in localStorage. The token route then:
+  1. checks `Authorization: Bearer <ID token>` against the tenant's JWKS (issuer
+     `https://<tenant id>.ciamlogin.com/<tenant id>/v2.0`, audience `ENTRA_CLIENT_ID` or
+     `ENTRA_EVAL_CLIENT_ID`);
+  2. issues a 15-minute LiveKit token whose identity is the `oid` claim.
 
-  Unauthenticated requests get 401. Supabase redirect URLs must include the Vercel URL.
-- **Browser configuration:** `next.config.ts` maps `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` to
-  `NEXT_PUBLIC_*` at build time, so the same `.env` serves both.
+  Unauthenticated requests get 401. The app registration's SPA redirect URIs must include the
+  Vercel URL and `http://localhost:3000`.
+- **Browser configuration:** `next.config.ts` maps `ENTRA_TENANT_ID`, `ENTRA_TENANT_SUBDOMAIN` and
+  `ENTRA_CLIENT_ID` to `NEXT_PUBLIC_*` at build time, so the same `.env` serves both.
 - **Layout** (call screen, top to bottom; same on phones and desktop):
   - Top bar: log out, Open mic / Push to talk switch, Today and Summary buttons, lesson mode,
     cost. It wraps on phones. Today and Summary open as overlays.
@@ -349,30 +354,38 @@ Measured costs:
 - **Spoken conversation:** about $0.043/min. Cartesia 43%, LiveKit 25%, Deepgram 20%, Claude 12%.
 - **Drill-heavy session:** about $0.065–0.073/min.
 
-## 14. Data model (Supabase Postgres)
+## 14. Data model (Azure SQL)
 
 | Table | Key columns | Written by |
 |---|---|---|
-| `learners` | `id` (= `auth.users.id`), `level` | session start |
-| `sessions` | `learner_id`, `level`, `started_at`, `ended_at`, `summary` jsonb, `cost` jsonb | start / summary / shutdown |
-| `vocab` | (`learner_id`, `term`), `spanish`, `english`, `card` jsonb (FSRS), `due` | gaps, recall, EN→ES drills |
+| `learners` | `id` (= Entra object id), `level` | session start |
+| `sessions` | `learner_id`, `level`, `started_at`, `ended_at`, `summary` JSON, `cost` JSON | start / summary / shutdown |
+| `vocab` | (`learner_id`, `term`), `spanish`, `english`, `card` JSON (FSRS), `due` | gaps, recall, EN→ES drills |
 | `errors` | `learner_id`, `session_id`, `category`, `original`, `corrected`, `rule` | feedback |
-| `drill_attempts` | `mode`, `prompt`, `expected`, `answer`, `score`, `details` jsonb | drills |
+| `drill_attempts` | `mode`, `prompt`, `expected`, `answer`, `score`, `details` JSON | drills |
 | `word_scores` | `attempt_id`, `term`, `word`, `mode`, `score` | drills |
 
-- **Access:** the agent connects as the database owner and bypasses RLS. RLS lets a logged-in learner
-  read only their own rows.
-- **Deletion:** deleting an auth user cascades to all of their rows.
-- **Migrations:** `supabase/migrations/`, applied with `agent/migrate.py` (tracked in
+- **Types:** `uniqueidentifier` ids, `datetimeoffset` times, JSON in `nvarchar(max)` with an
+  `isjson` check. `errors.rule` is written `[rule]` (T-SQL keyword).
+- **Access:** only the agent touches the database. It logs in as `tutor_agent` (contained user,
+  `db_datareader` + `db_datawriter`); migrations use the server admin. The browser never connects.
+- **Deletion:** `LearnerStore.delete_learner` removes a learner; their rows cascade. SQL Server
+  allows one cascade path per row, so links to sessions and attempts don't cascade themselves.
+- **Paused database:** the first login after a pause fails until the database resumes (seconds
+  up to a minute). `LearnerStore.connect` retries for up to 90 s on those errors
+  (`is_resuming`); other errors, such as a firewall block, fail at once and the session runs
+  without memory.
+- **Firewall:** server-level rules: the developer's IP, plus access for LiveKit Cloud (§18).
+- **Migrations:** `db/migrations/`, applied with `agent/migrate.py` (tracked in
   `schema_migrations`).
 
 ## 15. Configuration and secrets
 
 | Where | Keys |
 |---|---|
-| Root `.env` (local; `web/.env.local` is a symlink to it) | All of the below plus `SUPABASE_SECRET_KEY` (evals only). |
-| LiveKit Cloud agent secrets | `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `CARTESIA_API_KEY`, `SUPABASE_DB_URL`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION` (`LIVEKIT_*` injected by the platform). |
-| Vercel env vars | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `AGENT_NAME`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_JWKS_URL`. |
+| Root `.env` (local; `web/.env.local` is a symlink to it) | All of the below plus `AZURE_SQL_ADMIN_USER`/`AZURE_SQL_ADMIN_PASSWORD` (migrations) and `EVAL_USER_EMAIL`/`EVAL_USER_PASSWORD` (evals). |
+| LiveKit Cloud agent secrets | `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `CARTESIA_API_KEY`, `AZURE_SQL_SERVER`, `AZURE_SQL_DATABASE`, `AZURE_SQL_USER`, `AZURE_SQL_PASSWORD`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION` (`LIVEKIT_*` injected by the platform). |
+| Vercel env vars | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `AGENT_NAME`, `ENTRA_TENANT_ID`, `ENTRA_TENANT_SUBDOMAIN`, `ENTRA_CLIENT_ID`, `ENTRA_EVAL_CLIENT_ID`. |
 
 Optional agent flag: `RECORD_TURNS=1`.
 
@@ -380,7 +393,7 @@ Optional agent flag: `RECORD_TURNS=1`.
 
 | Check | What it verifies | Needs |
 |---|---|---|
-| `pytest` | Learner model: matching, FSRS flow across simulated days, drill word scores | DB |
+| `pytest` | Learner model: matching, FSRS flow across simulated days, drill word scores; which DB errors retry | DB |
 | `evals/recast.py` (`--memory`, `--scenario`) | Language policy of the tutor prompt (judge: Haiku) | API keys |
 | `evals/feedback.py` | Extractor accuracy, categories, latency | API keys |
 | `evals/translation.py` | Drill judge verdicts and item generator | API keys |
@@ -390,8 +403,9 @@ Optional agent flag: `RECORD_TURNS=1`.
 | `evals/lesson_modes.py` | All modes, spoken repeat on a synthetic mic track, replay, translation, cost | agent + web |
 | `evals/long_chat.py` | 30 typed turns: reply/feedback latency, summary | agent |
 | `evals/voice_latency.py` | Drives spoken turns, prints session cost (latency: read agent logs) | agent + web |
-| `evals/agent_wait.py` | Page still waits after 35 s without an agent (cold-start tolerance); Playwright | web dev with `AGENT_NAME=tutor-absent` |
 
+- **Eval login:** `evals/entra_login.py` signs in the fixed eval user (native authentication,
+  app `espanol-evals`); `memory.eval_learner` wipes that learner's rows before and after a run.
 - **Synthetic audio:** evals that need it use the tutor's own Cartesia voice (`evals/synth_audio.py`).
 - **Hosted runs:** end-to-end evals run against the hosted app with
   `WEB_URL=https://espanol-tutor.vercel.app`.
@@ -402,7 +416,8 @@ Optional agent flag: `RECORD_TURNS=1`.
   version.
   - The image runs `/app/.venv/bin/python main.py start`.
   - VAD and turn-detector models are downloaded at build time.
-  - It includes the Azure SDK's native libraries (`libssl3`, `libasound2`).
+  - It includes the native libraries of the Azure Speech SDK (`libssl3`, `libasound2`) and of
+    `mssql-python` (`libltdl7`, `libkrb5-3`, `libgssapi-krb5-2`; without them the driver fails to load).
   - Status and logs: `lk agent status`, `lk agent logs`. Roll back with `lk agent rollback`.
 - **Web:** Vercel deploys `tutor` on every push (production branch set to `tutor`). Deploy through
   git; `vercel deploy` from the local folder could upload the symlinked `.env`.
@@ -429,5 +444,9 @@ Optional agent flag: `RECORD_TURNS=1`.
   read by the Castilian voice.
 - **Word matching** has no lemmatizer, so inflected forms of a due word don't count as recall.
 - **Azure pricing** in `costs.py` is an estimate.
-- **Access control:** anyone can request a magic link unless sign-ups are disabled in Supabase
-  (Authentication → Sign In / Providers → User Signups).
+- **Access control:** anyone can sign up (Google, or email + password in the `signin` user flow).
+  The `eval-signin` flow also allows sign-up through the native authentication API.
+- **Database firewall vs LiveKit Cloud:** the cloud agent connects from Oracle Cloud addresses
+  (seen: `130.162.213.228`), not from LiveKit's published static ranges, so the rule that admits it
+  is a trade-off (see the firewall rules on the server).
+- **Paused database:** the first session after an hour idle waits for the database to resume.

@@ -4,10 +4,10 @@ due words and recent mistakes (Phase 3 "done when").
 Run (needs `main.py dev` and `web` dev server running):
     cd agent && uv run python evals/memory.py
 
-  throwaway Supabase user ──► web /api/token (401 without login, token with) ──► room
+  eval user (entra_login.py) ──► web /api/token (401 without login, token with) ──► room
   session 1: a vocab gap + a ser/estar error ──► disconnect (summary saved at shutdown)
   wait for the FSRS learning step ──► session 2: lesson_context RPC must list both
-  user deleted at the end (learner rows cascade)
+  learner rows deleted before and after (the Entra user stays)
 
 Cost: a few cents (tutor replies, feedback, one summary). Takes ~2 minutes.
 """
@@ -17,20 +17,25 @@ import json
 import os
 import sys
 import time
-import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from uuid import UUID
 
 import aiohttp
 from dotenv import load_dotenv
 from livekit import rtc
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from entra_login import eval_login  # noqa: E402
+
+from learner_store import DbLogin, LearnerStore, connection_string  # noqa: E402
+
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 WEB_URL = os.environ.get("WEB_URL", "http://localhost:3000")
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SECRET_KEY = os.environ["SUPABASE_SECRET_KEY"]
-PUBLISHABLE_KEY = os.environ["SUPABASE_PUBLISHABLE_KEY"]
 
 AGENT_NAME = "tutor"
 CHAT_TOPIC = "lk.chat"
@@ -52,42 +57,24 @@ EXPECTED_WORD = "paraguas"
 EXPECTED_CATEGORY = "ser_estar"
 
 
-async def create_user(http: aiohttp.ClientSession) -> tuple[str, str]:
-    """Confirmed throwaway user; returns (user id, access token)."""
-    email = f"memory-eval-{uuid.uuid4().hex[:8]}@example.com"
-    password = uuid.uuid4().hex
-    admin = {"apikey": SECRET_KEY, "Authorization": f"Bearer {SECRET_KEY}"}
-
-    async with http.post(
-        f"{SUPABASE_URL}/auth/v1/admin/users",
-        headers=admin,
-        json={"email": email, "password": password, "email_confirm": True},
-    ) as r:
-        r.raise_for_status()
-        user_id = (await r.json())["id"]
-
-    async with http.post(
-        f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
-        headers={"apikey": PUBLISHABLE_KEY},
-        json={"email": email, "password": password},
-    ) as r:
-        r.raise_for_status()
-        return user_id, (await r.json())["access_token"]
+@dataclass(frozen=True)
+class EvalLearner:
+    id: UUID  # Entra object id = LiveKit identity
+    id_token: str  # for the web token route
+    store: LearnerStore
 
 
-async def delete_user(http: aiohttp.ClientSession, user_id: str) -> None:
-    admin = {"apikey": SECRET_KEY, "Authorization": f"Bearer {SECRET_KEY}"}
-    async with http.delete(f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}", headers=admin) as r:
-        r.raise_for_status()
-
-
-async def saved_sessions(http: aiohttp.ClientSession, user_id: str) -> list[dict]:
-    """The learner's session rows (secret key bypasses row-level security)."""
-    admin = {"apikey": SECRET_KEY, "Authorization": f"Bearer {SECRET_KEY}"}
-    params = {"learner_id": f"eq.{user_id}", "select": "ended_at,summary", "order": "started_at"}
-    async with http.get(f"{SUPABASE_URL}/rest/v1/sessions", headers=admin, params=params) as r:
-        r.raise_for_status()
-        return await r.json()
+@asynccontextmanager
+async def eval_learner(http: aiohttp.ClientSession) -> AsyncIterator[EvalLearner]:
+    """The logged-in eval user, with no learner memory before and none left after."""
+    store = await LearnerStore.connect(connection_string(os.environ, DbLogin.AGENT))
+    learner_id, id_token = await eval_login(http)
+    await store.delete_learner(learner_id)
+    try:
+        yield EvalLearner(learner_id, id_token, store)
+    finally:
+        await store.delete_learner(learner_id)
+        await store.close()
 
 
 async def livekit_token(http: aiohttp.ClientSession, access_token: str | None) -> tuple[int, dict]:
@@ -179,9 +166,9 @@ async def main() -> int:
         if status != HTTP_UNAUTHORIZED:
             return 1
 
-        user_id, access_token = await create_user(http)
-        try:
-            status, details = await livekit_token(http, access_token)
+        async with eval_learner(http) as learner:
+            id_token = learner.id_token
+            status, details = await livekit_token(http, id_token)
             print(f"token with login: {status} (want {HTTP_OK})")
             if status != HTTP_OK:
                 return 1
@@ -193,27 +180,25 @@ async def main() -> int:
             await asyncio.sleep(FSRS_LEARNING_STEP_S)
 
             print("session 2")
-            _, details = await livekit_token(http, access_token)
+            _, details = await livekit_token(http, id_token)
             lesson = await lesson_of(details)
             print(f"  lesson: {json.dumps(lesson, ensure_ascii=False)}")
 
             await asyncio.sleep(SHUTDOWN_WAIT_S)  # let session 2 close before checking
-            first = (await saved_sessions(http, user_id))[0]
-            summary = first["summary"] or {}
-            print(f"  session 1 saved: ended {first['ended_at']}, summary {summary}")
+            first = (await learner.store.sessions_of(learner.id))[0]
+            summary = first.summary or {}
+            print(f"  session 1 saved: ended {first.ended_at}, summary {summary}")
 
             words = " ".join(w["spanish"] for w in lesson["due_words"])
             categories = [e["category"] for e in lesson["recent_errors"]]
             ok = (
                 EXPECTED_WORD in words
                 and EXPECTED_CATEGORY in categories
-                and first["ended_at"] is not None
+                and first.ended_at is not None
                 and bool(summary.get("patterns"))
             )
             print(f"\n{'PASS' if ok else 'FAIL'}: due words {words!r}, errors {categories}")
             return 0 if ok else 1
-        finally:
-            await delete_user(http, user_id)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Learner model tests.
 
-Matching tests are pure. The flow test runs against the Supabase DB in .env
-(SUPABASE_DB_URL) with a throwaway auth user, deleted afterwards (rows cascade).
+Matching tests are pure. The flow test runs against the Azure SQL database in .env
+(agent login) with a throwaway learner, deleted afterwards (rows cascade).
 """
 
 import os
@@ -10,7 +10,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import asyncpg
 import pytest
 from dotenv import load_dotenv
 
@@ -20,11 +19,11 @@ import fsrs  # noqa: E402
 
 from feedback import Correction, ErrorCategory, Feedback, UserLanguage, VocabItem  # noqa: E402
 from learner_model import LearnerModel, term_of, used_terms  # noqa: E402
-from learner_store import DrillAttempt, LearnerStore  # noqa: E402
+from learner_store import DbLogin, DrillAttempt, LearnerStore, connection_string  # noqa: E402
 from prompts import Level  # noqa: E402
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-DB_URL = os.environ.get("SUPABASE_DB_URL")
+DB = connection_string(os.environ, DbLogin.AGENT)
 
 UMBRELLA = VocabItem(spanish="el paraguas", english="umbrella")
 NEXT_DAY = timedelta(days=1)  # FSRS "Again" on a new card: due in minutes
@@ -69,24 +68,16 @@ def fb(
 
 @pytest.fixture
 async def db():
-    if not DB_URL:
-        pytest.skip("SUPABASE_DB_URL not set")
+    if not DB:
+        pytest.skip("Azure SQL agent login not set")
 
-    conn = await asyncpg.connect(DB_URL, statement_cache_size=0)
+    store = await LearnerStore.connect(DB)
     learner_id = uuid.uuid4()
-    await conn.execute(
-        "insert into auth.users (id, aud, role, email) values ($1, 'authenticated',"
-        " 'authenticated', $2)",
-        learner_id,
-        f"test-{learner_id}@example.invalid",
-    )
-    store = await LearnerStore.connect(DB_URL)
 
     yield store, learner_id
 
+    await store.delete_learner(learner_id)
     await store.close()
-    await conn.execute("delete from auth.users where id = $1", learner_id)
-    await conn.close()
 
 
 async def test_session_flow(db) -> None:

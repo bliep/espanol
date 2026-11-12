@@ -32,8 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from memory import (  # noqa: E402
     CHAT_TOPIC,
     FEEDBACK_TOPIC,
-    create_user,
-    delete_user,
+    eval_learner,
     join,
     livekit_token,
 )
@@ -194,9 +193,8 @@ async def run(learner: Learner, http: aiohttp.ClientSession, results: list) -> N
 async def main() -> int:
     results: list[tuple[str, bool]] = []
     async with aiohttp.ClientSession() as http:
-        user_id, access_token = await create_user(http)
-        try:
-            _, details = await livekit_token(http, access_token)
+        async with eval_learner(http) as login:
+            _, details = await livekit_token(http, login.id_token)
             room = rtc.Room()
             learner: Learner | None = None
 
@@ -216,8 +214,6 @@ async def main() -> int:
 
             await run(learner, http, results)
             await room.disconnect()
-        finally:
-            await delete_user(http, user_id)
 
     failed = [name for name, ok in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} checks pass")

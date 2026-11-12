@@ -1,6 +1,6 @@
 # Tutor agent image for LiveKit Cloud (lk agent create / lk agent deploy).
 # Based on LiveKit's uv template (docs.livekit.io/deploy/agents/builds); additions:
-# model download at build time, and the native libraries the Azure Speech SDK needs.
+# model download at build time, and the native libraries the Azure SDKs need.
 ARG PYTHON_VERSION=3.12
 FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-bookworm-slim AS base
 
@@ -25,9 +25,11 @@ RUN uv run --no-dev -m livekit.agents download-files
 
 FROM base
 
-# Azure Speech SDK (pronunciation scoring) links against OpenSSL and ALSA.
+# Azure Speech SDK (pronunciation scoring) links against OpenSSL and ALSA;
+# mssql-python (Azure SQL) needs libltdl and Kerberos.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libssl3 libasound2 ca-certificates \
+       libltdl7 libkrb5-3 libgssapi-krb5-2 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin appuser

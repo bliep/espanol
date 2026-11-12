@@ -26,7 +26,7 @@ import aiohttp
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lesson_modes import Learner  # noqa: E402
-from memory import create_user, delete_user, join, livekit_token  # noqa: E402
+from memory import eval_learner, join, livekit_token  # noqa: E402
 from synth_audio import synth  # noqa: E402
 
 from pronunciation import SAMPLE_RATE  # noqa: E402
@@ -50,9 +50,8 @@ async def main() -> int:
 
     async with aiohttp.ClientSession() as http:
         audio = await asyncio.gather(*(synth(http, t) for t in TURNS))
-        user_id, access_token = await create_user(http)
-        try:
-            _, details = await livekit_token(http, access_token)
+        async with eval_learner(http) as login:
+            _, details = await livekit_token(http, login.id_token)
             room, agent = await join(
                 details, on_speech_start=lambda: starts.append(time.perf_counter())
             )
@@ -74,8 +73,6 @@ async def main() -> int:
             cost = await learner.rpc(RPC_SESSION_COST)
             print(f"session cost: {cost}")
             await room.disconnect()
-        finally:
-            await delete_user(http, user_id)
 
     if not latencies:
         return 1
