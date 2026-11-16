@@ -11,7 +11,7 @@ class Level(StrEnum):
     C1 = "C1"
 
 
-DEFAULT_LEVEL = Level.A2
+DEFAULT_LEVEL = Level.A1  # every learner starts here; adaptive levelling comes later
 
 # What "speak at the learner's level" means, per level.
 _LEVEL_GUIDE: dict[Level, str] = {
