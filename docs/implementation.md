@@ -290,7 +290,7 @@ All payloads are JSON. The agent side is the source of truth; the TypeScript mir
 | `lesson_context` | none | `{due_words[], recent_errors[]}` |
 | `session_summary` | none | `{patterns[], encouragement, new_words[]}` (timeout 30 s) |
 | `word_scores` | none | `[{word, average, attempts}]` |
-| `session_cost` | none | `{minutes, claude, deepgram, cartesia, azure, livekit, total, per_minute}` |
+| `session_cost` | none | `{minutes, claude, deepgram, cartesia, azure, livekit, total, per_minute, models}` (`models`: USD per service/model) |
 | `replay_slow` | tutor line | `ok` |
 | `translate_line` | tutor line | English text |
 
@@ -346,6 +346,9 @@ CostMeter
   minutes ──► LiveKit agent + WebRTC minutes
 breakdown() ──► session_cost RPC (live), sessions.cost (at shutdown), costs.py report
 ```
+
+The web top bar shows the total and, below it, one line per service/model (`models`), refreshed
+every 10 s.
 
 Prices are constants in `costs.py` with their sources, checked 2026-11-09. Azure's price is an
 estimate ($1/h STT plus $0.30/h pronunciation assessment).

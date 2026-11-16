@@ -6,7 +6,7 @@
   wall clock   ── LiveKit agent + WebRTC minutes
                          │
                          ▼
-               breakdown(): per provider, total, per minute
+               breakdown(): per provider, per model, total, per minute
 
 Report over stored sessions: cd agent && uv run python costs.py [--days 30]
 
@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import os
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,7 +25,7 @@ from typing import Any
 
 from livekit.agents import AgentSession
 from livekit.agents.metrics.usage import LLMModelUsage, STTModelUsage, TTSModelUsage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 MTOK = 1_000_000
 SECONDS_PER_MINUTE = 60
@@ -52,6 +53,11 @@ AZURE_PER_HOUR = 1.0 + 0.30  # estimate: real-time STT $1/h + pronunciation add-
 LIVEKIT_AGENT_PER_MINUTE = 0.01  # livekit.com/pricing: agent session minutes beyond plan
 LIVEKIT_WEBRTC_PER_MINUTE = 0.0005  # learner's WebRTC connection minutes beyond plan
 
+# Labels of the per-model lines without a model name from LiveKit usage.
+SLOW_REPLAY_LINE = "cartesia slow replay"
+AZURE_LINE = "azure pronunciation"
+LIVEKIT_LINE = "livekit"
+
 
 class CostBreakdown(BaseModel):
     """Wire format of the session_cost RPC; also stored in sessions.cost."""
@@ -64,13 +70,16 @@ class CostBreakdown(BaseModel):
     livekit: float
     total: float
     per_minute: float
+    # Same money per service/model, e.g. {"claude-haiku-5-5": 0.012, "deepgram nova-3": 0.03}.
+    # Empty in sessions stored before it existed.
+    models: dict[str, float] = Field(default_factory=dict)
 
 
 class CostMeter:
     def __init__(self) -> None:
         self._start = time.monotonic()
         self._session: AgentSession | None = None
-        self._claude = 0.0  # direct calls, USD
+        self._claude: dict[str, float] = defaultdict(float)  # direct calls, USD per model
         self._azure_seconds = 0.0
         self._extra_tts_characters = 0  # TTS outside the session pipeline (slow replay)
 
@@ -80,7 +89,7 @@ class CostMeter:
     def add_claude(self, model: str, usage: Any) -> None:
         """usage: an Anthropic `Usage` (input_tokens excludes cache reads and writes)."""
         price = CLAUDE_PRICES[model]
-        self._claude += (
+        self._claude[model] += (
             usage.input_tokens * price.input
             + (usage.cache_creation_input_tokens or 0) * price.cache_write
             + (usage.cache_read_input_tokens or 0) * price.cache_read
@@ -94,20 +103,36 @@ class CostMeter:
         self._extra_tts_characters += characters
 
     def breakdown(self) -> CostBreakdown:
-        claude, deepgram = self._claude, 0.0
-        cartesia = self._extra_tts_characters * CARTESIA_PER_CHARACTER
+        # Per model first; provider totals are sums of their lines.
+        claude_lines: dict[str, float] = defaultdict(float, self._claude)
+        deepgram_lines: dict[str, float] = defaultdict(float)
+        cartesia_lines: dict[str, float] = defaultdict(float)
+        cartesia_lines[SLOW_REPLAY_LINE] = self._extra_tts_characters * CARTESIA_PER_CHARACTER
         for usage in self._session.usage.model_usage if self._session else []:
             match usage:
                 case LLMModelUsage() if usage.model in CLAUDE_PRICES:
-                    claude += _pipeline_llm_cost(usage)
+                    claude_lines[usage.model] += _pipeline_llm_cost(usage)
                 case STTModelUsage():
-                    deepgram += usage.audio_duration / SECONDS_PER_MINUTE * DEEPGRAM_PER_MINUTE
+                    cost = usage.audio_duration / SECONDS_PER_MINUTE * DEEPGRAM_PER_MINUTE
+                    deepgram_lines[f"{usage.provider.lower()} {usage.model}"] += cost
                 case TTSModelUsage():
-                    cartesia += usage.characters_count * CARTESIA_PER_CHARACTER
+                    cost = usage.characters_count * CARTESIA_PER_CHARACTER
+                    cartesia_lines[f"{usage.provider.lower()} {usage.model}"] += cost
 
         minutes = (time.monotonic() - self._start) / SECONDS_PER_MINUTE
         azure = self._azure_seconds / SECONDS_PER_HOUR * AZURE_PER_HOUR
         livekit = minutes * (LIVEKIT_AGENT_PER_MINUTE + LIVEKIT_WEBRTC_PER_MINUTE)
+        models = {
+            **claude_lines,
+            **deepgram_lines,
+            **cartesia_lines,
+            AZURE_LINE: azure,
+            LIVEKIT_LINE: livekit,
+        }
+
+        claude = sum(claude_lines.values())
+        deepgram = sum(deepgram_lines.values())
+        cartesia = sum(cartesia_lines.values())
         total = claude + deepgram + cartesia + azure + livekit
         return CostBreakdown(
             minutes=round(minutes, 2),
@@ -118,6 +143,7 @@ class CostMeter:
             livekit=round(livekit, 4),
             total=round(total, 4),
             per_minute=round(total / minutes, 4) if minutes else 0.0,
+            models={line: round(usd, 4) for line, usd in models.items()},
         )
 
 
