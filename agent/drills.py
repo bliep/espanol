@@ -8,7 +8,8 @@
   any turn after the recap ──► next round
   typed answers ──► answer() via the mode controller (LiveKit's text input skips the hook)
 
-Spoken verdicts are built here from the scores, so they are short and predictable.
+Spoken verdicts are built here from the scores, so they are short and predictable; their
+wording (target language) comes from the LanguagePack's DrillPack.
 """
 
 import asyncio
@@ -25,6 +26,7 @@ from pydantic import BaseModel
 
 from drill_content import DrillItem, DrillItemGenerator, TranslationJudge
 from feedback import VocabItem
+from language_pack import DEFAULT_PACK, DrillPack, LanguagePack
 from learner_model import LearnerModel, LessonContext, WeakWord
 from learner_store import DrillAttempt
 from modes import LessonMode
@@ -45,27 +47,25 @@ PRON_FAIR = 60
 WORDS_TO_MENTION = 2  # weakest words named in a pronunciation verdict
 MEANING_WEIGHT = 0.6  # translate_en score = 60% meaning + 40% form
 
-# The LLM is never called in a drill; instructions only describe the role.
-DRILL_INSTRUCTIONS = "Eres Lucía, tutora de español. Ahora diriges un ejercicio."
 
-_INTRO: dict[LessonMode, str] = {
-    LessonMode.TRANSLATE_EN: (
-        "Vamos a traducir. Te digo una frase en inglés y tú la dices en español."
-    ),
-    LessonMode.TRANSLATE_ES: (
-        "Vamos a traducir. Te digo una frase en español y tú me dices qué significa en inglés."
-    ),
-    LessonMode.REPEAT: "Vamos a practicar la pronunciación. Repite cada frase después de mí.",
-}
+def _intro(phrases: DrillPack, mode: LessonMode) -> str:
+    match mode:
+        case LessonMode.TRANSLATE_EN:
+            return phrases.intro_to_target
+        case LessonMode.TRANSLATE_ES:
+            return phrases.intro_to_english
+        case _:
+            return phrases.intro_repeat
 
-_ASK: dict[LessonMode, str] = {
-    LessonMode.TRANSLATE_EN: "Número {n}. ¿Cómo se dice: {english}?",
-    LessonMode.TRANSLATE_ES: "Número {n}. ¿Qué significa: {spanish}?",
-    LessonMode.REPEAT: "Número {n}. Repite: {spanish}",
-}
 
-SAY_IT_ALOUD = "Dilo en voz alta, por favor: {spanish}"
-RECAP = "Fin de la ronda: {score} de cien. Cuando quieras, dime algo y hacemos otra ronda."
+def _ask_template(phrases: DrillPack, mode: LessonMode) -> str:
+    match mode:
+        case LessonMode.TRANSLATE_EN:
+            return phrases.ask_to_target
+        case LessonMode.TRANSLATE_ES:
+            return phrases.ask_to_english
+        case _:
+            return phrases.ask_repeat
 
 
 class DrillEventKind(StrEnum):
@@ -101,6 +101,7 @@ class DrillDeps:
     generator: DrillItemGenerator = field(default_factory=DrillItemGenerator)
     judge: TranslationJudge = field(default_factory=TranslationJudge)
     assessor: PronunciationAssessor | None = None  # repeat mode only
+    pack: LanguagePack = DEFAULT_PACK
 
 
 @dataclass
@@ -120,8 +121,10 @@ class Drill(Agent):
     mode: LessonMode
 
     def __init__(self, deps: DrillDeps) -> None:
-        super().__init__(instructions=DRILL_INSTRUCTIONS)
+        # The LLM is never called in a drill; instructions only describe the role.
+        super().__init__(instructions=deps.pack.drill.role)
         self._deps = deps
+        self._phrases = deps.pack.drill
         self._items: list[DrillItem] = []
         self._index = 0
         self._scores: list[float] = []
@@ -131,7 +134,7 @@ class Drill(Agent):
 
     async def on_enter(self) -> None:
         self._active = True
-        self.session.say(_INTRO[self.mode])
+        self.session.say(_intro(self._phrases, self.mode))
         await self._new_round()
 
     async def on_exit(self) -> None:
@@ -176,7 +179,7 @@ class Drill(Agent):
             prompt=self._ask(item),
             source=self._source(item),
             answer=answer,
-            expected=item.spanish if self.mode != LessonMode.TRANSLATE_ES else item.english,
+            expected=item.sentence if self.mode != LessonMode.TRANSLATE_ES else item.english,
             score=scored.score,
             words=scored.words,
             correction=scored.correction,
@@ -216,16 +219,17 @@ class Drill(Agent):
         score = round(sum(self._scores) / len(self._scores))
         weakest = await self._deps.learner.weakest_words() if self._deps.learner else []
         await self._publish(DrillEventKind.RECAP, score=score, weakest=weakest)
-        self.session.say(f"{verdict} {RECAP.format(score=score)}")
+        self.session.say(f"{verdict} {self._phrases.recap.format(score=score)}")
         self._round_over = True
 
     def _source(self, item: DrillItem) -> str:
-        return item.english if self.mode == LessonMode.TRANSLATE_EN else item.spanish
+        return item.english if self.mode == LessonMode.TRANSLATE_EN else item.sentence
 
     def _ask(self, item: DrillItem) -> str:
         # "¿Qué significa: Voy al trabajo?" not "...trabajo.?"
-        english, spanish = item.english.rstrip(".!?"), item.spanish.rstrip(".!?")
-        return _ASK[self.mode].format(n=self._index + 1, english=english, spanish=spanish)
+        english, sentence = item.english.rstrip(".!?"), item.sentence.rstrip(".!?")
+        template = _ask_template(self._phrases, self.mode)
+        return template.format(n=self._index + 1, english=english, sentence=sentence)
 
     async def _publish(self, kind: DrillEventKind, **fields: object) -> None:
         event = DrillEvent(kind=kind, mode=self.mode, index=self._index, total=len(self._items))
@@ -239,7 +243,7 @@ class Drill(Agent):
         if not learner:
             return
 
-        expected = item.english if self.mode == LessonMode.TRANSLATE_ES else item.spanish
+        expected = item.english if self.mode == LessonMode.TRANSLATE_ES else item.sentence
         attempt = DrillAttempt(
             self.mode.value, self._ask(item), expected, answer, scored.score, scored.details
         )
@@ -250,22 +254,25 @@ class Drill(Agent):
             log.exception("recording drill attempt failed")
 
 
-class TranslateToSpanish(Drill):
+class TranslateToTarget(Drill):
+    """English sentence → learner says it in the target language."""
+
     mode = LessonMode.TRANSLATE_EN
 
     async def _score(self, item: DrillItem, answer: str) -> Scored:
         v = await self._deps.judge.judge(
-            item.english, item.spanish, item.target, answer, self._deps.level
+            item.english, item.sentence, item.target, answer, self._deps.level
         )
         score = round(MEANING_WEIGHT * v.meaning + (1 - MEANING_WEIGHT) * v.form)
         recalled = v.target_used and v.meaning >= GOOD
 
+        phrases = self._phrases
         if v.meaning >= GOOD and v.form >= GOOD:
-            verdict = "¡Muy bien!"
+            verdict = phrases.very_good
         elif v.meaning >= FAIR and v.corrected.strip().lower() != answer.lower():
-            verdict = f"Casi. Mejor: {v.corrected}."
+            verdict = phrases.almost_better.format(corrected=v.corrected)
         else:
-            verdict = f"Se dice: {item.spanish}"
+            verdict = phrases.say_it.format(sentence=item.sentence)
 
         target = WordScore(
             word=item.target,
@@ -285,17 +292,20 @@ class TranslateToSpanish(Drill):
 
 
 class TranslateToEnglish(Drill):
+    """Target-language sentence → learner says what it means in English."""
+
     mode = LessonMode.TRANSLATE_ES
 
     async def _score(self, item: DrillItem, answer: str) -> Scored:
         # No target word for comprehension: the judge scores meaning only.
-        v = await self._deps.judge.judge(item.spanish, item.english, "", answer, self._deps.level)
+        v = await self._deps.judge.judge(item.sentence, item.english, "", answer, self._deps.level)
+        phrases = self._phrases
         if v.meaning >= GOOD:
-            verdict = "¡Correcto!"
+            verdict = phrases.correct
         elif v.meaning >= FAIR:
-            verdict = f"Casi. Significa: {item.english}"
+            verdict = phrases.almost_means.format(english=item.english)
         else:
-            verdict = f"Significa: {item.english}"
+            verdict = phrases.means.format(english=item.english)
 
         error = WordError.NONE if v.meaning >= FAIR else WordError.MISPRONOUNCED
         target = WordScore(word=item.target, score=v.meaning, error=error)
@@ -312,7 +322,9 @@ class RepeatAfterMe(Drill):
     def __init__(self, deps: DrillDeps) -> None:
         super().__init__(deps)
         self._capture = SpeechCapture()
-        self._assessor = deps.assessor or PronunciationAssessor()
+        self._assessor = deps.assessor or PronunciationAssessor(
+            locale=deps.pack.speech.pronunciation_locale
+        )
 
     async def on_enter(self) -> None:
         self._capture.attach(self.session)
@@ -336,24 +348,25 @@ class RepeatAfterMe(Drill):
     async def _score(self, item: DrillItem, answer: str) -> Scored | None:
         pcm = self._capture.take()
         if pcm is None:
-            self.session.say(SAY_IT_ALOUD.format(spanish=item.spanish))
+            self.session.say(self._phrases.say_it_aloud.format(sentence=item.sentence))
             return None
 
-        p = await self._assessor.assess(pcm, item.spanish)
+        p = await self._assessor.assess(pcm, item.sentence)
         weak = sorted((w for w in p.words if w.score < PRON_GOOD), key=lambda w: w.score)
+        phrases = self._phrases
         if p.score >= PRON_GOOD:
-            verdict = "¡Muy bien!"
+            verdict = phrases.very_good
         elif p.score >= PRON_FAIR and weak:
             names = ", ".join(w.word for w in weak[:WORDS_TO_MENTION])
-            verdict = f"Bien. Cuidado con: {names}."
+            verdict = phrases.careful_with.format(words=names)
         else:
-            verdict = f"Escucha bien: {item.spanish}."
+            verdict = phrases.listen.format(sentence=item.sentence)
 
         return Scored(score=p.score, verdict=verdict, words=p.words, details=p.model_dump())
 
 
 DRILLS: dict[LessonMode, type[Drill]] = {
-    LessonMode.TRANSLATE_EN: TranslateToSpanish,
+    LessonMode.TRANSLATE_EN: TranslateToTarget,
     LessonMode.TRANSLATE_ES: TranslateToEnglish,
     LessonMode.REPEAT: RepeatAfterMe,
 }

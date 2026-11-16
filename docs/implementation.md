@@ -44,7 +44,8 @@ audio both ways, text streams from agent to client, and RPCs from client to agen
 |---|---|
 | `main.py` | Entrypoint: per-session wiring (learner, pipeline, feedback, modes, RPCs, shutdown). |
 | `pipeline.py` | Builds the voice pipeline: VAD, STT, LLM, TTS, turn handling; slow-replay TTS. |
-| `prompts.py` | System prompt per CEFR level, learner memory block, role-play scenarios, greetings. |
+| `prompts.py` | System prompt (English) per CEFR level, learner memory block, role-play, greetings. |
+| `language_pack.py` | Everything per target language (`SPANISH`): variety, level guides, examples, error labels, scenario roles; `Speech` (STT/TTS language, voice, pronunciation locale); `DrillPack` (spoken drill phrases, item and judge hints). `main.py` picks the pack (`DEFAULT_PACK`) and passes it to the pipeline, drills and pronunciation. |
 | `tutor_agents.py` | LLM agents: `Tutor` (free talk) and `RolePlay`; optional turn recording. |
 | `modes.py` | `LessonMode` enum and the `set_lesson_mode` payload (`ModeRequest`). |
 | `mode_controller.py` | Switches agents mid-call (LiveKit handoff); routes typed drill answers. |
@@ -151,7 +152,11 @@ LiveKit's preemptive LLM generation is on by default. Input mode is open mic or 
 
 ## 5. Tutor prompt and language policy (`prompts.py`)
 
-The system prompt is in Spanish and has four parts:
+The system prompt is in English; everything language-specific (variety, persona, level guides,
+target-language examples, error labels, scenario roles) comes from a `LanguagePack`
+(`language_pack.py`, `SPANISH`). Examples stay in the target language: they steer the reply
+language. Recast eval after the switch: conversation 94% (was 92%), restaurant 97% (was 86%,
+after making English answers in role-play wait for a recast), doctor 92%. It has four parts:
 - **Persona:** "Lucía", tutor of Spain Spanish.
 - **Level guide:** grammar and vocabulary bounds per CEFR level.
 - **Language policy:**
@@ -258,7 +263,7 @@ RepeatAfterMe.stt_node: STT input frames ──tee──► SpeechCapture
    ring buffer (~1 s) ──► on user_state "speaking": start recording with the ring (no clipped onset)
    end of turn: take() ──► 16 kHz PCM, or None if no speech (typed ──► "Dilo en voz alta")
 PronunciationAssessor.assess(pcm, reference):
-   push stream ──► Azure continuous recognition (es-ES, word granularity, miscue off)
+   push stream ──► Azure continuous recognition (pack locale, es-ES; word granularity, miscue off)
    per segment: recognized words + accuracy ──► align to the reference (difflib)
    ──► words [{word, score, error: none | mispronounced | omitted}], completeness, fluency
 ```

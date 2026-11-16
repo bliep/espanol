@@ -1,4 +1,4 @@
-"""Pronunciation scoring with Azure Speech Pronunciation Assessment (es-ES).
+"""Pronunciation scoring with Azure Speech Pronunciation Assessment (locale from the pack).
 
 The only module that talks to the Azure Speech SDK. Callers pass 16-bit mono PCM and
 the reference sentence; they get word scores back.
@@ -27,10 +27,10 @@ import azure.cognitiveservices.speech as speechsdk
 from pydantic import BaseModel
 
 from costs import CostMeter
+from language_pack import DEFAULT_PACK
 
 log = logging.getLogger("tutor.pronunciation")
 
-LOCALE = "es-ES"  # target variety (CLAUDE.md)
 SAMPLE_RATE = 16_000  # what we push; callers resample to this
 BYTES_PER_SECOND = SAMPLE_RATE * 2  # 16-bit mono
 RECOGNITION_TIMEOUT_S = 30.0
@@ -63,12 +63,17 @@ MISPRONOUNCED_BELOW = 60  # word accuracy under this is shown as an error
 
 class PronunciationAssessor:
     def __init__(
-        self, key: str | None = None, region: str | None = None, meter: CostMeter | None = None
+        self,
+        key: str | None = None,
+        region: str | None = None,
+        meter: CostMeter | None = None,
+        locale: str = DEFAULT_PACK.speech.pronunciation_locale,
     ) -> None:
         self._config = speechsdk.SpeechConfig(
             subscription=key or os.environ[KEY_ENV], region=region or os.environ[REGION_ENV]
         )
         self._meter = meter
+        self._locale = locale  # e.g. "es-ES", from the language pack
 
     async def assess(self, pcm: bytes, reference: str) -> PronunciationScore:
         """pcm: 16 kHz, 16-bit, mono. Runs the blocking SDK call in a worker thread."""
@@ -87,7 +92,7 @@ class PronunciationAssessor:
 
         recognizer = speechsdk.SpeechRecognizer(
             self._config,
-            language=LOCALE,
+            language=self._locale,
             audio_config=speechsdk.audio.AudioConfig(stream=stream),
         )
         # Miscue detection off: segments are aligned to the full reference below.

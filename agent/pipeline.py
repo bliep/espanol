@@ -10,16 +10,17 @@ from livekit.agents import AgentSession, TurnHandlingOptions, inference, vad
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins import anthropic, cartesia, deepgram, silero
 
+from language_pack import DEFAULT_PACK, LanguagePack
 from prompts import Level
 
 # Deepgram EU region (user is in NL). Plugin converts https → wss.
 DEEPGRAM_EU_URL = "https://api.eu.deepgram.com/v1/listen"
 STT_MODEL = "nova-3"
-# Spoken input is Spanish only; English goes through the chat input. Deepgram has no
-# "English or Spanish" setting: language=multi guesses among ~55 languages and turned the
-# learner's "Me llamo Sonia" into Italian, Greek or Persian (3 of 4 recordings, hints made
-# no difference); Spanish-only got all 4 right and still transcribes most English words.
-STT_LANGUAGE = "es"
+# Spoken input is the target language only (LanguagePack.speech.stt_language); English goes
+# through the chat input. Deepgram has no "English or Spanish" setting: language=multi
+# guesses among ~55 languages and turned the learner's "Me llamo Sonia" into Italian, Greek
+# or Persian (3 of 4 recordings, hints made no difference); Spanish-only got all 4 right and
+# still transcribes most English words.
 
 LLM_MODEL = "claude-sonnet-5-5"
 
@@ -33,9 +34,7 @@ LLM_REQUEST_EXTRAS: dict[str, Any] = {
     "output_config": {"effort": "low"},
 }
 
-TTS_MODEL = "sonic-3.5"
-TTS_LANGUAGE = "es"
-VOICE_BLANCA_ES = "538a8872-3799-4df5-b373-b78493b766c6"  # Castilian female
+TTS_MODEL = "sonic-3.5"  # language and voice: LanguagePack.speech
 
 # Slower speech for beginners. Cartesia sonic-3.x accepts 0.6–1.5.
 TTS_SPEED: dict[Level, float] = {
@@ -74,26 +73,31 @@ def load_vad() -> vad.VAD:
     return silero.VAD.load()
 
 
-def build_slow_tts() -> cartesia.TTS:
+def build_slow_tts(pack: LanguagePack = DEFAULT_PACK) -> cartesia.TTS:
     """Same voice at replay speed, separate from the session's TTS (its speed is untouched)."""
     return cartesia.TTS(
-        model=TTS_MODEL, language=TTS_LANGUAGE, voice=VOICE_BLANCA_ES, speed=SLOW_REPLAY_SPEED
+        model=TTS_MODEL,
+        language=pack.speech.tts_language,
+        voice=pack.speech.tts_voice,
+        speed=SLOW_REPLAY_SPEED,
     )
 
 
-def build_session(vad_model: vad.VAD, level: Level, keyterms: list[str]) -> AgentSession:
+def build_session(
+    vad_model: vad.VAD, level: Level, keyterms: list[str], pack: LanguagePack = DEFAULT_PACK
+) -> AgentSession:
     """keyterms: the day's target words, so Deepgram recognises exactly what is practised."""
     stt = deepgram.STT(
         model=STT_MODEL,
-        language=STT_LANGUAGE,
+        language=pack.speech.stt_language,
         smart_format=False,  # keep learner mistakes visible
         base_url=DEEPGRAM_EU_URL,
         keyterm=keyterms or NOT_GIVEN,
     )
     tts = cartesia.TTS(
         model=TTS_MODEL,
-        language=TTS_LANGUAGE,
-        voice=VOICE_BLANCA_ES,
+        language=pack.speech.tts_language,
+        voice=pack.speech.tts_voice,
         speed=TTS_SPEED[level],
     )
 

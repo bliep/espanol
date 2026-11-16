@@ -22,6 +22,7 @@ from drills import DrillDeps
 from feedback import FeedbackExtractor
 from feedback_channel import FeedbackChannel, FeedbackMessage
 from input_modes import InputController, InputMode
+from language_pack import DEFAULT_PACK, LanguagePack
 from latency import LatencyLogger
 from learner_model import EMPTY_LESSON, LearnerModel, LessonContext
 from learner_store import DbLogin, LearnerStore, connection_string
@@ -135,10 +136,13 @@ def register_mode_rpcs(
 
 
 def register_support_rpcs(
-    participant: rtc.LocalParticipant, session: AgentSession, meter: CostMeter
+    participant: rtc.LocalParticipant,
+    session: AgentSession,
+    meter: CostMeter,
+    pack: LanguagePack,
 ) -> None:
     """Listening support (slow replay, translation) and the running session cost."""
-    slow_tts = pipeline.build_slow_tts()
+    slow_tts = pipeline.build_slow_tts(pack)
     translator = SentenceTranslator(meter=meter)
 
     def line_of(data: rtc.RpcInvocationData) -> str:
@@ -220,7 +224,8 @@ async def entrypoint(ctx: JobContext) -> None:
         "lesson: %d due words, %d error types", len(lesson.due_words), len(lesson.recent_errors)
     )
 
-    session = pipeline.build_session(ctx.proc.userdata[VAD_KEY], level, lesson.keyterms())
+    pack = DEFAULT_PACK  # one language for now; per-learner choice comes later
+    session = pipeline.build_session(ctx.proc.userdata[VAD_KEY], level, lesson.keyterms(), pack)
     LatencyLogger().attach(session)
     meter = CostMeter()
     meter.attach(session)
@@ -257,9 +262,14 @@ async def entrypoint(ctx: JobContext) -> None:
         lesson,
         learner,
         publish_drill,
-        generator=DrillItemGenerator(meter=meter),
-        judge=TranslationJudge(meter=meter),
-        assessor=PronunciationAssessor(meter=meter) if os.environ.get(AZURE_KEY_ENV) else None,
+        generator=DrillItemGenerator(meter=meter, pack=pack),
+        judge=TranslationJudge(meter=meter, pack=pack),
+        assessor=(
+            PronunciationAssessor(meter=meter, locale=pack.speech.pronunciation_locale)
+            if os.environ.get(AZURE_KEY_ENV)
+            else None
+        ),
+        pack=pack,
     )
     recorder = TurnRecorder(level) if recording_enabled() else None
     if recorder:
@@ -271,7 +281,7 @@ async def entrypoint(ctx: JobContext) -> None:
     register_input_rpcs(participant, InputController(session))
     register_lesson_rpcs(participant, recap, lesson)
     register_mode_rpcs(participant, modes, learner)
-    register_support_rpcs(participant, session, meter)
+    register_support_rpcs(participant, session, meter, pack)
 
     greeting = build_greeting([w.spanish for w in lesson.due_words])
     text_input = room_io.TextInputOptions(text_input_cb=modes.on_text_input)

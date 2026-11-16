@@ -1,12 +1,13 @@
 """Drill content on Claude Haiku: item generation and translation judging.
 
   DrillItemGenerator: level + due words + frequent errors ──► N sentence pairs
-                      e.g. {"spanish": "Hoy llevo el paraguas.", "english": "Today I'm taking
+                      e.g. {"sentence": "Hoy llevo el paraguas.", "english": "Today I'm taking
                       my umbrella.", "target": "el paraguas"}
   TranslationJudge:   source + expected + learner answer ──► meaning / form scores,
                       target word used?, minimally corrected answer
 
-Both are structured output calls, off the voice path of free conversation.
+Both are structured output calls, off the voice path of free conversation. The target
+language and its hints come from the LanguagePack.
 """
 
 from typing import Any
@@ -16,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from costs import CostMeter
 from feedback import VocabItem
+from language_pack import DEFAULT_PACK, LanguagePack
 from modes import LessonMode
 from prompts import Level
 
@@ -25,9 +27,9 @@ DRILL_REQUEST_EXTRAS: dict[str, Any] = {"output_config": {"effort": "low"}}
 
 
 class DrillItem(BaseModel):
-    spanish: str = Field(description="Natural Spain Spanish sentence")
+    sentence: str = Field(description="Natural sentence in the target language")
     english: str = Field(description="Natural English translation")
-    target: str = Field(description="The practised Spanish word as it appears in the list")
+    target: str = Field(description="The practised word as it appears in the list")
     target_english: str = Field(description="English meaning of the target word")
 
 
@@ -36,10 +38,10 @@ class _Items(BaseModel):
 
 
 _GENERATE = """\
-You write drill sentences for an English-speaking learner of Spain Spanish (CEFR {level}).
+You write drill sentences for an English-speaking learner of {variety} (CEFR {level}).
 Write exactly {count} items for this drill: {purpose}
 
-Each item: one Spain Spanish sentence at {level} level (grammar and vocabulary the learner
+Each item: one {variety} sentence at {level} level (grammar and vocabulary the learner
 can manage), its natural English translation, and the target word it practises (with its
 English meaning). The target must appear in the sentence exactly as written in the item.
 - Use these words first, one per item, as given: {words}
@@ -50,24 +52,30 @@ English meaning). The target must appear in the sentence exactly as written in t
 """
 
 _PURPOSE: dict[LessonMode, str] = {
-    LessonMode.TRANSLATE_EN: "the learner hears the English and says it in Spanish.",
-    LessonMode.TRANSLATE_ES: "the learner hears the Spanish and says what it means in English.",
-    LessonMode.REPEAT: "the learner repeats the Spanish sentence; pronunciation is scored.",
+    LessonMode.TRANSLATE_EN: "the learner hears the English and says it in {language}.",
+    LessonMode.TRANSLATE_ES: (
+        "the learner hears the {language} and says what it means in English."
+    ),
+    LessonMode.REPEAT: "the learner repeats the {language} sentence; pronunciation is scored.",
 }
 
 _LENGTH: dict[LessonMode, str] = {
-    LessonMode.TRANSLATE_EN: "4 to 9 words in Spanish.",
-    LessonMode.TRANSLATE_ES: "5 to 10 words in Spanish.",
-    LessonMode.REPEAT: "6 to 10 words, with a mix of sounds (r/rr, j, ll, ñ, vowels).",
+    LessonMode.TRANSLATE_EN: "4 to 9 words in {language}.",
+    LessonMode.TRANSLATE_ES: "5 to 10 words in {language}.",
+    LessonMode.REPEAT: "6 to 10 words, with a mix of sounds ({sounds}).",
 }
 
 
 class DrillItemGenerator:
     def __init__(
-        self, client: anthropic.AsyncAnthropic | None = None, meter: CostMeter | None = None
+        self,
+        client: anthropic.AsyncAnthropic | None = None,
+        meter: CostMeter | None = None,
+        pack: LanguagePack = DEFAULT_PACK,
     ) -> None:
         self._client = client or anthropic.AsyncAnthropic()
         self._meter = meter
+        self._pack = pack
 
     async def generate(
         self,
@@ -77,13 +85,15 @@ class DrillItemGenerator:
         words: list[VocabItem],
         error_types: list[str],
     ) -> list[DrillItem]:
+        pack = self._pack
         system = _GENERATE.format(
+            variety=pack.variety,
             level=level,
             count=count,
-            purpose=_PURPOSE[mode],
+            purpose=_PURPOSE[mode].format(language=pack.language),
             words=", ".join(w.spanish for w in words) or "(none)",
             errors=", ".join(error_types) or "(none)",
-            length=_LENGTH[mode],
+            length=_LENGTH[mode].format(language=pack.language, sounds=pack.drill.repeat_sounds),
         )
         response = await self._client.messages.parse(
             model=DRILL_MODEL,
@@ -109,15 +119,15 @@ class TranslationVerdict(BaseModel):
 
 
 _JUDGE = """\
-You grade one translation drill answer from an English-speaking learner of Spain Spanish
+You grade one translation drill answer from an English-speaking learner of {variety}
 (CEFR {level}). The answer is a speech-to-text transcript or typed text: ignore missing
 accents, punctuation and capitalisation. Judge meaning first, form second.
 
-meaning: 100 if the source's meaning is fully conveyed (any valid wording, synonyms and
-  Latin American forms are fine), lower for missing or wrong parts, 0 if unrelated or empty.
+meaning: 100 if the source's meaning is fully conveyed (any valid wording and synonyms are
+  fine), lower for missing or wrong parts, 0 if unrelated or empty.
 form: grammar, agreement, conjugation and word forms of the answer, in the answer's language.
-  Only real errors lower it. Valid alternatives are not errors: other word order, an
-  article or possessive instead of the model's (el/mi), pronominal verbs (me llevo).
+  Only real errors lower it. Valid alternatives are not errors: other word order,
+  {alternatives}.
 target_used: whether the target word appears in the answer (any inflection).
 corrected: the learner's own answer, minimally fixed; do not replace it with the model answer.
 """
@@ -125,10 +135,14 @@ corrected: the learner's own answer, minimally fixed; do not replace it with the
 
 class TranslationJudge:
     def __init__(
-        self, client: anthropic.AsyncAnthropic | None = None, meter: CostMeter | None = None
+        self,
+        client: anthropic.AsyncAnthropic | None = None,
+        meter: CostMeter | None = None,
+        pack: LanguagePack = DEFAULT_PACK,
     ) -> None:
         self._client = client or anthropic.AsyncAnthropic()
         self._meter = meter
+        self._pack = pack
 
     async def judge(
         self, source: str, expected: str, target: str, answer: str, level: Level
@@ -140,7 +154,11 @@ class TranslationJudge:
         response = await self._client.messages.parse(
             model=DRILL_MODEL,
             max_tokens=DRILL_MAX_TOKENS,
-            system=_JUDGE.format(level=level),
+            system=_JUDGE.format(
+                variety=self._pack.variety,
+                level=level,
+                alternatives=self._pack.drill.judge_alternatives,
+            ),
             messages=[{"role": "user", "content": content}],
             output_format=TranslationVerdict,
             **DRILL_REQUEST_EXTRAS,

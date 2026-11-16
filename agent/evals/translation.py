@@ -119,11 +119,11 @@ async def generator_check(generator: DrillItemGenerator) -> tuple[int, int]:
     if missing:
         problems.append(f"given words not used: {missing}")
     for i in items:
-        if not used_terms(i.spanish, {term_of(i.target)}):
-            problems.append(f"target {i.target!r} not in {i.spanish!r}")
+        if not used_terms(i.sentence, {term_of(i.target)}):
+            problems.append(f"target {i.target!r} not in {i.sentence!r}")
 
     print(
-        f"\ngenerator ({elapsed:.0f} ms): " + "; ".join(f"{i.spanish} [{i.target}]" for i in items)
+        f"\ngenerator ({elapsed:.0f} ms): " + "; ".join(f"{i.sentence} [{i.target}]" for i in items)
     )
     for p in problems:
         print(f"     ✗ {p}")

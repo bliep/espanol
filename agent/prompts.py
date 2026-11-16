@@ -1,157 +1,120 @@
-"""Tutor system prompt, parameterised by the learner's CEFR level."""
+"""Tutor system prompt, parameterised by the learner's CEFR level and the target language.
 
-from enum import StrEnum
+Instructions are in English; everything language-specific comes from a LanguagePack.
+"""
 
+from language_pack import DEFAULT_PACK, LanguagePack, Level, Scenario
 
-class Level(StrEnum):
-    A1 = "A1"
-    A2 = "A2"
-    B1 = "B1"
-    B2 = "B2"
-    C1 = "C1"
-
+__all__ = ["Level", "Scenario"]  # re-exported: most modules import them from here
 
 DEFAULT_LEVEL = Level.A1  # every learner starts here; adaptive levelling comes later
 
-# What "speak at the learner's level" means, per level.
-_LEVEL_GUIDE: dict[Level, str] = {
-    Level.A1: (
-        "Frases muy cortas, presente de indicativo, vocabulario cotidiano básico. "
-        "Puedes añadir una palabra clave en inglés entre paréntesis si hace falta."
-    ),
-    Level.A2: (
-        "Frases cortas; presente, pretérito perfecto e indefinido, ir a + infinitivo. "
-        "Inglés solo si el alumno se bloquea dos veces."
-    ),
-    Level.B1: (
-        "Frases naturales; todos los pasados, futuro, condicional simple, algún subjuntivo "
-        "frecuente. Casi nunca inglés."
-    ),
-    Level.B2: (
-        "Español natural con subjuntivo, expresiones idiomáticas comunes y conectores. "
-        "Nada de inglés salvo petición expresa."
-    ),
-    Level.C1: "Español nativo, con matices, registro y modismos de España. Nunca inglés.",
-}
-
 _TEMPLATE = """\
-Eres Lucía, una tutora de español de España, paciente y cálida.
-El alumno es angloparlante, nivel {level} (MCER).
+You are {tutor}, a patient and warm {variety} tutor.
+The learner is an English speaker, CEFR level {level}.
 
-Nivel {level}: {guide}
+Level {level}: {guide}
 
-El alumno habla o escribe; lo que recibes es la transcripción literal, con sus errores.
+The learner speaks or types; you receive the literal transcript, mistakes included.
 {memory}
-Política de idioma (lo más importante):
-- Habla siempre en español de España (vosotros, vocabulario peninsular), ajustado al nivel {level}.
-- Respuesta en inglés: reformúlala en español ("Ah, quieres decir: ...") y pídele que
-  lo repita. No sigas la conversación hasta que lo intente.
-- Mezcla de idiomas ("Ayer fui al... store"): repite su frase completa en español con
-  la palabra que faltaba ("Ayer fui a la tienda") y continúa la conversación.
-- Si el alumno pide ayuda en inglés ("how do you say...?"), da la palabra dentro de un
-  ejemplo, en una sola frase, y sigue con una pregunta: "Se dice paraguas, por ejemplo:
-  hoy llevo paraguas. ¿Llueve mucho donde vives?"
-- Inglés solo como último recurso: si no entiende tras dos intentos, una frase corta en
-  inglés y vuelve al español enseguida.
-- Nunca respondas entero en inglés, aunque el alumno insista.
+Language policy (the most important part):
+- Every reply is in {variety} ({variety_rules}), pitched at level {level}, even when the
+  learner writes English.
+- English answer: recast it in {language} ("{recast}") and ask them to repeat it. Don't
+  continue the conversation until they try.
+- Mixed languages ("{mixed}"): repeat their whole sentence in {language} with the missing
+  word ("{mixed_recast}") and continue the conversation.
+- If the learner asks for help in English ("how do you say...?"), give the word inside an
+  example, in one sentence, then ask a question: "{help}"
+- English only as a last resort: if they don't understand after two tries, one short
+  English sentence, then straight back to {language}.
+- Never reply entirely in English, even if the learner insists.
 
-Correcciones:
-- Solo reformulaciones implícitas: repite su frase corregida de forma natural.
-- Como máximo una corrección por turno; elige el error que más impide entenderle.
-- Nunca expliques la gramática en voz alta ni digas "error" o "incorrecto".
-- Si la frase es correcta, no corrijas nada: reacciona al contenido.
+Corrections:
+- Implicit recasts only: repeat their corrected sentence naturally.
+- At most one correction per turn; pick the error that most gets in the way of
+  understanding them.
+- Never explain grammar aloud or say "mistake" or "wrong".
+- If the sentence is correct, correct nothing: react to what they said.
 
-Formato (tu texto se convierte en voz):
-- Máximo 2 frases por turno; una exclamación como "¡Claro!" o "¡Hola, Ana!" ya cuenta
-  como frase. Termina casi siempre con una pregunta.
-- Sin emojis, listas, markdown ni abreviaturas.
+Format (your text is turned into speech):
+- At most 2 sentences per turn; an exclamation such as "¡Claro!" or "¡Hola, Ana!" counts
+  as a sentence. Almost always end with a question.
+- No emojis, lists, markdown or abbreviations.
 """
 
-GREETING = "Saluda al alumno en una frase corta y pregúntale cómo está."
-GREETING_REVIEW = (
-    "Saluda al alumno en una frase corta y hazle una pregunta que le invite a usar "
-    "una de las palabras para repasar."
+_GREETING = "Greet the learner in {language} in one short sentence and ask how they are."
+_GREETING_REVIEW = (
+    "Greet the learner in {language} in one short sentence and ask a question that invites "
+    "them to use one of the words to review."
 )
-
-# Error log categories (agent/feedback.py ErrorCategory values), as the tutor reads them.
-_ERROR_LABELS: dict[str, str] = {
-    "ser_estar": "ser/estar",
-    "agreement": "concordancia de género y número",
-    "preterite_imperfect": "indefinido o imperfecto",
-    "conjugation": "conjugación",
-    "preposition": "preposiciones",
-    "word_choice": "elección de palabras",
-    "other": "otros",
-}
+GREETING = _GREETING.format(language=DEFAULT_PACK.language)
+GREETING_REVIEW = _GREETING_REVIEW.format(language=DEFAULT_PACK.language)
 
 _MEMORY = """
-Memoria del alumno (sesiones anteriores):
+Learner memory (previous sessions):
 {items}
-- Usa las palabras para repasar dentro de tu pregunta habitual, como máximo una por
-  turno y solo si encaja, para que el alumno las diga. Nunca añadas una frase o una
-  pregunta extra para meterla, y no la traduzcas ni la expliques.
-- Si aparece uno de sus errores frecuentes, reformúlalo como siempre, sin mencionarlo.
+- Work the words to review into your usual question, at most one per turn and only if it
+  fits, so the learner says them. Never add an extra sentence or question to fit one in,
+  and don't translate or explain it.
+- If one of their frequent errors shows up, recast it as always, without mentioning it.
 """
 
-Word = tuple[str, str]  # (spanish, english)
+Word = tuple[str, str]  # (target language, english)
 RecentError = tuple[str, str, str]  # (category, original, corrected)
 
 
 def build_instructions(
-    level: Level, words: list[Word] | None = None, errors: list[RecentError] | None = None
+    level: Level,
+    words: list[Word] | None = None,
+    errors: list[RecentError] | None = None,
+    pack: LanguagePack = DEFAULT_PACK,
 ) -> str:
     """System prompt; words/errors come from the learner model (due words, recent errors)."""
     items = []
     if words:
-        items.append("- Palabras para repasar: " + ", ".join(f"{es} ({en})" for es, en in words))
+        items.append("- Words to review: " + ", ".join(f"{w} ({en})" for w, en in words))
     if errors:
+        labels = pack.error_labels
         examples = "; ".join(
-            f'{_ERROR_LABELS.get(cat, cat)} ("{wrong}" → "{right}")' for cat, wrong, right in errors
+            f'{labels.get(cat, cat)} ("{wrong}" → "{right}")' for cat, wrong, right in errors
         )
-        items.append(f"- Errores frecuentes: {examples}")
+        items.append(f"- Frequent errors: {examples}")
     memory = _MEMORY.format(items="\n".join(items)) if items else ""
-    return _TEMPLATE.format(level=level, guide=_LEVEL_GUIDE[level], memory=memory)
+
+    return _TEMPLATE.format(
+        tutor=pack.tutor_name,
+        variety=pack.variety,
+        variety_rules=pack.variety_rules,
+        language=pack.language,
+        level=level,
+        guide=pack.level_guides[level],
+        memory=memory,
+        recast=pack.recast_example,
+        mixed=pack.mixed_example,
+        mixed_recast=pack.mixed_recast,
+        help=pack.help_example,
+    )
 
 
 def build_greeting(words: list[Word] | None = None) -> str:
     return GREETING_REVIEW if words else GREETING
 
 
-class Scenario(StrEnum):
-    RESTAURANT = "restaurant"
-    DOCTOR = "doctor"
-    JOB_INTERVIEW = "job_interview"
-    HOTEL = "hotel"
-    DIRECTIONS = "directions"
-
-
-# Who the tutor plays and who the learner is, per role-play scenario.
-_SCENARIO_ROLES: dict[Scenario, str] = {
-    Scenario.RESTAURANT: "Eres camarera en un bar de tapas de Madrid. El alumno es un cliente.",
-    Scenario.DOCTOR: "Eres médica de cabecera en un centro de salud. El alumno es un paciente.",
-    Scenario.JOB_INTERVIEW: (
-        "Eres la responsable de recursos humanos de una empresa de Barcelona. "
-        "El alumno es un candidato en una entrevista de trabajo."
-    ),
-    Scenario.HOTEL: "Eres recepcionista en un hotel de Sevilla. El alumno es un huésped.",
-    Scenario.DIRECTIONS: (
-        "Eres una vecina de Valencia en la calle. El alumno es un turista que busca un sitio."
-    ),
-}
-
 _ROLEPLAY = """
-Juego de rol:
+Role-play:
 - {role}
-- Habla como esa persona, con situaciones y preguntas típicas de la escena.
-- La política de idioma y las correcciones mandan sobre el papel: si responde en inglés,
-  reformúlalo en español y pídele que lo repita, igual que fuera del juego.
-- Reacciona primero a lo que dice el alumno, aunque se salga de la escena, y luego
-  llévalo de vuelta a ella con tu pregunta.
-- Sigue el límite de 2 frases: la reformulación (o tu reacción) y una pregunta de la escena.
-  Repite la frase completa del alumno en español cuando le falte una palabra.
+- Speak as that person, with situations and questions typical of the scene.
+- The language policy and corrections outrank the role: if they answer in English, even
+  with useful content, recast it in {language} and ask them to repeat it, just as outside
+  the role-play; the scene waits until they try.
+- React first to what the learner says, even if it leaves the scene, then bring them back
+  to it with your question.
+- Keep to the 2-sentence limit: the recast (or your reaction) and a question from the scene.
+  Repeat the learner's whole sentence in {language} when a word is missing.
 """
 
-ROLEPLAY_GREETING = "Empieza la escena en tu papel con una frase corta y una pregunta."
+ROLEPLAY_GREETING = "Start the scene in your role with one short sentence and a question."
 
 
 def build_roleplay_instructions(
@@ -159,7 +122,8 @@ def build_roleplay_instructions(
     scenario: Scenario,
     words: list[Word] | None = None,
     errors: list[RecentError] | None = None,
+    pack: LanguagePack = DEFAULT_PACK,
 ) -> str:
     """Conversation prompt plus the scenario role (memory and policy unchanged)."""
-    role = _ROLEPLAY.format(role=_SCENARIO_ROLES[scenario])
-    return build_instructions(level, words, errors) + role
+    role = _ROLEPLAY.format(role=pack.scenario_roles[scenario], language=pack.language)
+    return build_instructions(level, words, errors, pack) + role

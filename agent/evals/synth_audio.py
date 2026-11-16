@@ -12,20 +12,21 @@ import aiohttp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from language_pack import DEFAULT_PACK  # noqa: E402
 from pronunciation import SAMPLE_RATE  # noqa: E402
 
 CARTESIA_URL = "https://api.cartesia.ai/tts/bytes"
 CARTESIA_VERSION = "2025-04-16"
 TTS_MODEL = "sonic-3.5"
-VOICE_BLANCA_ES = "538a8872-3799-4df5-b373-b78493b766c6"  # agent/pipeline.py
+SPEECH = DEFAULT_PACK.speech  # same language and voice as the agent
 
 
 async def synth(http: aiohttp.ClientSession, text: str) -> bytes:
     body = {
         "model_id": TTS_MODEL,
         "transcript": text,
-        "language": "es",
-        "voice": {"mode": "id", "id": VOICE_BLANCA_ES},
+        "language": SPEECH.tts_language,
+        "voice": {"mode": "id", "id": SPEECH.tts_voice},
         "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": SAMPLE_RATE},
     }
     headers = {"X-API-Key": os.environ["CARTESIA_API_KEY"], "Cartesia-Version": CARTESIA_VERSION}
